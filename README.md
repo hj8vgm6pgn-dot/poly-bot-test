@@ -35,3 +35,14 @@ with the current bot state as JSON. This makes the live state readable even when
 reader cannot execute the dashboard JavaScript or access a separate API route.
 
 No strategy thresholds, candidate logic, or paper-trading behavior were changed.
+
+
+## v0.5.3 monitoring field-map fix
+
+The server-rendered remote snapshot now flattens the real nested live state from
+`signal`, `momentum`, `up`, `down`, `current_quality`, and `market`.
+
+This exposes live fields including lag score/direction, TWAP move, UP/DOWN prices,
+5s/10s/20s momentum, filters passed, reason, edge, bankroll, and source quality.
+
+No strategy logic, thresholds, position sizing, or paper-trading behavior changed.
