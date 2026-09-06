@@ -1,4 +1,4 @@
-import os,time,asyncio,json
+import os,time,asyncio
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -24,11 +24,19 @@ MIN_LIQ=float(os.getenv("MIN_BOOK_LIQUIDITY_USD",50))
 MIN_MOVE=float(os.getenv("MIN_ABS_TWAP_MOVE_BPS",2))
 POLL=float(os.getenv("BOT_POLL_SECONDS",1))
 
+MODEL_PROB_CAP=float(os.getenv("MODEL_PROB_CAP",.90))
+MARKET_BLEND_WEIGHT=float(os.getenv("MARKET_BLEND_WEIGHT",.45))
+MAX_MODEL_MARKET_GAP=float(os.getenv("MAX_MODEL_MARKET_GAP",.30))
+MIN_ENTRY_PRICE=float(os.getenv("MIN_ENTRY_PRICE",.08))
+MAX_ENTRY_HARD=float(os.getenv("MAX_ENTRY_PRICE_HARD",.92))
+EXTREME_PRICE_THRESHOLD=float(os.getenv("EXTREME_PRICE_THRESHOLD",.12))
+EXTREME_MIN_MOVE=float(os.getenv("EXTREME_MIN_MOVE_BPS",6))
+EXTREME_MIN_SECS=int(os.getenv("EXTREME_MIN_SECONDS_LEFT",45))
+MIN_MODEL_PROB=float(os.getenv("MIN_MODEL_PROBABILITY",.58))
+
 feed=MultiProxyFeed()
-market=None
-stopped=False
-last_status={"message":"Starting v0.3…"}
-bg_task=None
+market=None; stopped=False; bg_task=None
+last_status={"message":"Starting v0.4…"}
 
 def pnl_today():
     cutoff=int(time.time())-86400
@@ -44,7 +52,6 @@ def get_or_create_ref(m):
     with conn() as c:
         row=c.execute("SELECT * FROM market_refs WHERE market_slug=?",(m["slug"],)).fetchone()
     if row:return dict(row)
-
     twap,q=feed.twap_at(m["start_ts"],60)
     if twap is None:return None
     age=float(q.get("first_gap",0))
@@ -69,103 +76,109 @@ def settle_trade(slug,winner):
             pnl=(r["shares"]-r["stake"]) if r["side"]==winner else -r["stake"]
             c.execute("""UPDATE trades SET status='CLOSED',winner=?,pnl=?,resolved_ts=?
                          WHERE id=?""",(winner,pnl,int(time.time()),r["id"]))
-            log("INFO",f"Resolved {slug}: {winner}; {r['side']} P&L ${pnl:.2f}")
+        c.execute("UPDATE signal_log SET winner=? WHERE market_slug=?",(winner,slug))
 
 async def resolve_open():
     with conn() as c:
         slugs=[r["market_slug"] for r in c.execute(
             "SELECT DISTINCT market_slug FROM trades WHERE status='OPEN'").fetchall()]
     for slug in slugs[:10]:
-        if not slug:continue
         try:
             winner=await resolved_winner(slug)
             if winner:settle_trade(slug,winner)
         except Exception:pass
 
+def log_signal(now,m,sig,move_bps,ua,da):
+    with conn() as c:
+        c.execute("""INSERT INTO signal_log(
+            ts,market_id,market_slug,seconds_left,move_bps,up_ask,down_ask,
+            raw_up_probability,blended_up_probability,chosen_side,chosen_probability,
+            market_price,edge,action,reason
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (now,m["market_id"],m["slug"],m["end_ts"]-now,move_bps,ua,da,
+         sig.raw_up_probability,sig.blended_up_probability,sig.side,sig.probability,
+         sig.market_price,sig.edge,sig.action,sig.reason))
+
 async def bot_loop():
     global market,last_status
-    log("INFO","v0.3 started")
+    log("INFO","v0.4 started")
+    last_logged_second=None
     while True:
         try:
-            await feed.update()
-            now=int(time.time())
-            await resolve_open()
-
+            await feed.update(); now=int(time.time()); await resolve_open()
             m=await discover_current_btc5m(now)
             if m and (not market or m["slug"]!=market["slug"]):
-                market=m
-                log("INFO",f"Market detected {m['slug']}")
+                market=m; last_logged_second=None; log("INFO",f"Market detected {m['slug']}")
 
             if not market:
-                last_status={"mode":MODE,"message":"Searching for current BTC 5m market…","stopped":stopped}
+                last_status={"version":"0.4","mode":MODE,"message":"Searching for current BTC 5m market…","stopped":stopped}
                 await asyncio.sleep(POLL);continue
 
             ref=get_or_create_ref(market)
             if not ref:
-                last_status={"mode":MODE,"message":"Building exact boundary reference…",
-                             "market":market,"stopped":stopped}
+                last_status={"version":"0.4","mode":MODE,"message":"Building boundary reference…","market":market,"stopped":stopped}
                 await asyncio.sleep(POLL);continue
 
             seconds_left=market["end_ts"]-now
             current_twap,q=feed.twap_at(time.time(),60)
             if current_twap is None:
-                last_status={"mode":MODE,"message":"Building 60s composite TWAP…","stopped":stopped}
                 await asyncio.sleep(POLL);continue
 
-            ub,db=await asyncio.gather(get_book(market["up_token_id"]),
-                                      get_book(market["down_token_id"]))
-            ua,ubid,us,ul=book_metrics(ub)
-            da,dbid,ds,dl=book_metrics(db)
+            ub,db=await asyncio.gather(get_book(market["up_token_id"]),get_book(market["down_token_id"]))
+            ua,ubid,us,ul=book_metrics(ub); da,dbid,ds,dl=book_metrics(db)
 
             sig=decide(ref["start_twap"],current_twap,seconds_left,ua,da,us,ds,ul,dl,
                        feed.recent_vol_bps(),MIN_EDGE,MAX_ENTRY,MIN_SECS,MAX_SECS,
-                       MAX_SPREAD,MIN_LIQ,MIN_MOVE)
+                       MAX_SPREAD,MIN_LIQ,MIN_MOVE,MODEL_PROB_CAP,MARKET_BLEND_WEIGHT,
+                       MAX_MODEL_MARKET_GAP,MIN_ENTRY_PRICE,MAX_ENTRY_HARD,
+                       EXTREME_PRICE_THRESHOLD,EXTREME_MIN_MOVE,EXTREME_MIN_SECS,
+                       MIN_MODEL_PROB)
+
+            move_bps=(current_twap/ref["start_twap"]-1)*10000
+            # Log at most once every 5 seconds while inside the relevant window.
+            if 0 <= seconds_left <= 150 and (last_logged_second is None or abs(seconds_left-last_logged_second)>=5):
+                log_signal(now,market,sig,move_bps,ua,da); last_logged_second=seconds_left
 
             pnl=pnl_today(); bankroll=START+pnl; stake=max(1,bankroll*RISK)
             blocked=None
             if stopped:blocked="Emergency stop active"
-            elif MODE!="paper":blocked="Live execution disabled in v0.3"
+            elif MODE!="paper":blocked="Live execution disabled in v0.4"
             elif pnl<=-(START*MAX_DAILY):blocked="Daily loss limit reached"
             elif already_traded(market["market_id"]):blocked="Already traded this market"
 
             executed=False
             if sig.action=="BUY" and not blocked:
                 shares=stake/sig.market_price
-                move_bps=(current_twap/ref["start_twap"]-1)*10000
                 side_spread=us if sig.side=="UP" else ds
                 side_liq=ul if sig.side=="UP" else dl
-                qual=f"{ref['capture_method']}; current coverage={q.get('coverage',0):.0%}; avg sources={q.get('source_count',0):.1f}"
+                market_prob=sig.market_up_probability if sig.side=="UP" else 1-sig.market_up_probability
+                raw_prob=sig.raw_up_probability if sig.side=="UP" else 1-sig.raw_up_probability
+                qual=f"{ref['capture_method']}; coverage={q.get('coverage',0):.0%}; sources={q.get('source_count',0):.1f}"
                 with conn() as c:
                     c.execute("""INSERT OR IGNORE INTO trades(
                         ts,market_id,market_slug,side,price,stake,shares,probability,edge,mode,
                         start_twap,entry_twap,entry_move_bps,entry_seconds_left,entry_spread,
-                        entry_liquidity,entry_feed_quality
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        entry_liquidity,entry_feed_quality,raw_model_probability,
+                        market_implied_probability,blended_probability,model_market_gap,strategy_version
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (now,market["market_id"],market["slug"],sig.side,sig.market_price,stake,shares,
                      sig.probability,sig.edge,MODE,ref["start_twap"],current_twap,move_bps,
-                     seconds_left,side_spread,side_liq,qual))
+                     seconds_left,side_spread,side_liq,qual,raw_prob,market_prob,
+                     sig.probability,sig.model_market_gap,"0.4"))
                     executed=c.total_changes>0
-                if executed:
-                    log("TRADE",f"PAPER {sig.side} ${stake:.2f} @ {sig.market_price:.3f}; edge {sig.edge:.1%}; {seconds_left}s left")
 
-            ot=open_trade()
             last_status={
-                "version":"0.3","mode":MODE,"stopped":stopped,
-                "market":market,"seconds_left":seconds_left,
-                "feed_source":feed.source,
+                "version":"0.4","mode":MODE,"stopped":stopped,"market":market,
                 "feed_warning":"Multi-exchange proxy — NOT exact Chainlink settlement feed",
-                "start_twap":ref["start_twap"],"start_ref_method":ref["capture_method"],
-                "start_ref_age_seconds":ref["ref_age_seconds"],
-                "current_twap":current_twap,"current_quality":q,
-                "move_bps":(current_twap/ref["start_twap"]-1)*10000,
+                "seconds_left":seconds_left,"start_ref_method":ref["capture_method"],
+                "current_quality":q,"move_bps":move_bps,
                 "up":{"ask":ua,"bid":ubid,"spread":us,"liquidity":ul},
                 "down":{"ask":da,"bid":dbid,"spread":ds,"liquidity":dl},
                 "signal":sig.__dict__,"blocked":blocked,"paper_trade_executed":executed,
-                "daily_pnl":pnl,"bankroll":bankroll,"next_stake":stake,
-                "open_trade":ot
+                "daily_pnl":pnl,"bankroll":bankroll,"next_stake":stake,"open_trade":open_trade()
             }
         except Exception as e:
-            last_status={"version":"0.3","mode":MODE,"stopped":stopped,
+            last_status={"version":"0.4","mode":MODE,"stopped":stopped,
                          "message":f"Bot loop error: {type(e).__name__}: {e}"}
             log("ERROR",last_status["message"])
         await asyncio.sleep(POLL)
@@ -176,96 +189,115 @@ async def lifespan(app):
     bg_task=asyncio.create_task(bot_loop())
     yield
     bg_task.cancel()
-    try:await bg_task
-    except BaseException:pass
+    try: await bg_task
+    except BaseException: pass
 
-app=FastAPI(title="BTC 5m Polymarket Bot v0.3",lifespan=lifespan)
+app=FastAPI(title="BTC 5m Bot v0.4",lifespan=lifespan)
 
 @app.post("/api/stop")
 async def stop():
     global stopped
-    stopped=True;log("WARN","Emergency stop enabled")
-    return {"ok":True}
+    stopped=True; return {"ok":True}
 
 @app.post("/api/resume")
 async def resume():
     global stopped
-    stopped=False;log("INFO","Bot resumed")
-    return {"ok":True}
+    stopped=False; return {"ok":True}
 
 @app.get("/api/status")
-async def status():return last_status
+async def status(): return last_status
 
 @app.get("/api/trades")
 async def trades():
-    with conn() as c:rows=c.execute("SELECT * FROM trades ORDER BY id DESC LIMIT 100").fetchall()
+    with conn() as c: rows=c.execute("SELECT * FROM trades ORDER BY id DESC LIMIT 100").fetchall()
     return [dict(r) for r in rows]
 
 @app.get("/api/stats")
 async def stats():
-    with conn() as c:rows=c.execute("SELECT * FROM trades WHERE status='CLOSED'").fetchall()
-    n=len(rows);wins=sum(1 for r in rows if float(r["pnl"])>0);pnl=sum(float(r["pnl"]) for r in rows)
+    with conn() as c:
+        rows=c.execute("SELECT * FROM trades WHERE status='CLOSED' AND strategy_version='0.4'").fetchall()
+    n=len(rows); wins=sum(1 for r in rows if float(r["pnl"])>0); pnl=sum(float(r["pnl"]) for r in rows)
     avg_edge=sum(float(r["edge"]) for r in rows)/n if n else 0
-    return {"closed_trades":n,"wins":wins,"losses":n-wins,
-            "win_rate":wins/n if n else 0,"total_pnl":pnl,"avg_entry_edge":avg_edge}
+    return {"closed_trades":n,"wins":wins,"losses":n-wins,"win_rate":wins/n if n else 0,
+            "total_pnl":pnl,"avg_entry_edge":avg_edge}
+
+@app.get("/api/calibration")
+async def calibration():
+    # Calibration of logged blended UP probabilities against final winner.
+    with conn() as c:
+        rows=c.execute("""SELECT blended_up_probability,winner FROM signal_log
+                          WHERE winner IS NOT NULL""").fetchall()
+    buckets={}
+    for r in rows:
+        p=float(r["blended_up_probability"])
+        lo=int(p*10)/10
+        lo=max(0.0,min(0.9,lo))
+        key=f"{int(lo*100)}-{int((lo+.1)*100)}%"
+        b=buckets.setdefault(key,{"n":0,"up_wins":0,"avg_p":0})
+        b["n"]+=1; b["avg_p"]+=p
+        if r["winner"]=="UP": b["up_wins"]+=1
+    for b in buckets.values():
+        b["avg_p"]/=b["n"]; b["actual_up_rate"]=b["up_wins"]/b["n"]
+    return buckets
 
 @app.get("/",response_class=HTMLResponse)
-async def dashboard():return HTML
+async def dashboard(): return HTML
 
-HTML=r"""<!doctype html><html><head>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>BTC 5M Bot v0.3</title>
-<style>
-body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#090c0f;color:#f7f7f8;margin:0;padding:20px}
-.wrap{max-width:680px;margin:auto}.card{background:#171b20;border:1px solid #252b33;border-radius:20px;padding:18px;margin:12px 0}
+HTML=r"""<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>BTC 5M Bot v0.4</title><style>
+body{font-family:-apple-system;background:#090c0f;color:#f7f7f8;margin:0;padding:20px}.wrap{max-width:680px;margin:auto}
+.card{background:#171b20;border:1px solid #252b33;border-radius:20px;padding:18px;margin:12px 0}
 h1{font-size:28px}.big{font-size:35px;font-weight:800}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.muted{color:#9ca3af}.warn{color:#fbbf24;font-size:13px}.good{color:#4ade80}.bad{color:#fb7185}
-.pill{display:inline-block;border-radius:999px;background:#272d35;padding:5px 9px;font-size:12px}
+.muted{color:#9ca3af}.warn{color:#fbbf24;font-size:13px}.good{color:#4ade80}.pill{display:inline-block;border-radius:999px;background:#272d35;padding:5px 9px;font-size:12px}
 .row{display:flex;justify-content:space-between;gap:12px;margin:6px 0}.small{font-size:13px}
 button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;width:100%}.stop{background:#ef4444;color:white}.go{background:#22c55e;color:#07140b}
 .trade{font-size:13px;padding:9px 0;border-bottom:1px solid #293039}
 </style></head><body><div class="wrap">
-<h1>BTC 5M Bot <span class="pill">PAPER · v0.3</span></h1>
+<h1>BTC 5M Bot <span class="pill">PAPER · v0.4</span></h1>
 <div class="card"><div class="muted">Current market</div><div id="market">Starting…</div><div id="feed" class="warn"></div><div id="quality" class="muted small"></div></div>
 <div class="card"><div class="muted">Current signal</div><div id="sig" class="big">Starting…</div><div id="why"></div><div id="blocked" class="warn"></div></div>
 <div id="openCard" class="card" style="display:none"><div class="muted">Open paper position</div><div id="openSide" class="big"></div><div id="openDetails"></div></div>
 <div class="grid"><div class="card"><div class="muted">Time left</div><div id="time" class="big">—</div></div><div class="card"><div class="muted">TWAP move</div><div id="move" class="big">—</div></div></div>
 <div class="grid"><div class="card"><div class="muted">UP ask</div><div id="up" class="big">—</div></div><div class="card"><div class="muted">DOWN ask</div><div id="down" class="big">—</div></div></div>
 <div class="card">
-<div class="row"><span>Current probability</span><b id="prob">—</b></div>
+<div class="row"><span>Raw model UP</span><b id="raw">—</b></div>
+<div class="row"><span>Market implied UP</span><b id="mkt">—</b></div>
+<div class="row"><span>Blended UP</span><b id="blend">—</b></div>
+<div class="row"><span>Model/market gap</span><b id="gap">—</b></div>
 <div class="row"><span>Current edge</span><b id="edge">—</b></div>
 <div class="row"><span>Next stake</span><b id="stake">—</b></div>
 <div class="row"><span>Bankroll</span><b id="bank">—</b></div>
-<div class="row"><span>Daily P&L</span><b id="pnl">—</b></div>
 </div>
 <div class="grid"><button class="stop" onclick="fetch('/api/stop',{method:'POST'})">STOP</button><button class="go" onclick="fetch('/api/resume',{method:'POST'})">RESUME</button></div>
-<div class="card"><b>Performance</b><div id="stats" class="muted"></div></div>
+<div class="card"><b>v0.4 Performance</b><div id="stats" class="muted"></div></div>
 <div class="card"><b>Recent trades</b><div id="trades" class="muted"></div></div>
 </div>
 <script>
 function money(x){return '$'+Number(x||0).toFixed(2)}
 async function tick(){try{
 let x=await fetch('/api/status').then(r=>r.json());
-market.textContent=x.market?.slug||x.message||'Searching…';
-feed.textContent=x.feed_warning||'';
+market.textContent=x.market?.slug||x.message||'Searching…';feed.textContent=x.feed_warning||'';
 quality.textContent=x.start_ref_method?`Start ref: ${x.start_ref_method} · coverage ${Math.round((x.current_quality?.coverage||0)*100)}% · sources ${(x.current_quality?.source_count||0).toFixed(1)}`:'';
 if(x.signal){
- sig.textContent=x.signal.action+(x.signal.side?' '+x.signal.side:'');why.textContent=x.signal.reason||'';
- time.textContent=(x.seconds_left??0)+'s';move.textContent=(x.move_bps??0).toFixed(2)+' bp';
- up.textContent=(x.up?.ask??0).toFixed(3);down.textContent=(x.down?.ask??0).toFixed(3);
- prob.textContent=((x.signal.probability||0)*100).toFixed(1)+'%';edge.textContent=((x.signal.edge||0)*100).toFixed(1)+'%';
- stake.textContent=money(x.next_stake);bank.textContent=money(x.bankroll);pnl.textContent=money(x.daily_pnl);
+ sig.textContent=x.signal.action+(x.signal.side?' '+x.signal.side:''); why.textContent=x.signal.reason||'';
+ time.textContent=(x.seconds_left??0)+'s'; move.textContent=(x.move_bps??0).toFixed(2)+' bp';
+ up.textContent=(x.up?.ask??0).toFixed(3); down.textContent=(x.down?.ask??0).toFixed(3);
+ raw.textContent=(x.signal.raw_up_probability*100).toFixed(1)+'%';
+ mkt.textContent=(x.signal.market_up_probability*100).toFixed(1)+'%';
+ blend.textContent=(x.signal.blended_up_probability*100).toFixed(1)+'%';
+ gap.textContent=(x.signal.model_market_gap*100).toFixed(1)+'%';
+ edge.textContent=(x.signal.edge*100).toFixed(1)+'%';
+ stake.textContent=money(x.next_stake); bank.textContent=money(x.bankroll);
  blocked.textContent=x.blocked?('BLOCKED: '+x.blocked):'';
 }else{sig.textContent=x.message||'Waiting…'}
-if(x.open_trade){
- openCard.style.display='block';let t=x.open_trade;
+if(x.open_trade){openCard.style.display='block';let t=x.open_trade;
  openSide.textContent=`${t.side} · ${money(t.stake)} @ ${Number(t.price).toFixed(3)}`;
- openDetails.innerHTML=`Entry probability <b>${(Number(t.probability)*100).toFixed(1)}%</b> · edge <b>${(Number(t.edge)*100).toFixed(1)}%</b><br>Entered with <b>${t.entry_seconds_left}s</b> left · move <b>${Number(t.entry_move_bps||0).toFixed(2)} bp</b><br><span class="muted small">${t.entry_feed_quality||''}</span>`;
+ openDetails.innerHTML=`Raw model <b>${(Number(t.raw_model_probability||t.probability)*100).toFixed(1)}%</b> · market <b>${(Number(t.market_implied_probability||0)*100).toFixed(1)}%</b> · blended <b>${(Number(t.blended_probability||t.probability)*100).toFixed(1)}%</b><br>Edge <b>${(Number(t.edge)*100).toFixed(1)}%</b> · ${t.entry_seconds_left}s left · move ${Number(t.entry_move_bps||0).toFixed(2)} bp`;
 }else openCard.style.display='none';
 let st=await fetch('/api/stats').then(r=>r.json());
-stats.textContent=st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg entry edge ${(st.avg_entry_edge*100).toFixed(1)}%`:'No resolved v0.3 trades yet';
+stats.textContent=st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}%`:'No resolved v0.4 trades yet';
 let tr=await fetch('/api/trades').then(r=>r.json());
-trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% model · ${(Number(t.edge)*100).toFixed(1)}% edge · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
+trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% blended · ${(Number(t.edge)*100).toFixed(1)}% edge · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
 }catch(e){sig.textContent='Dashboard reconnecting…'}}
 setInterval(tick,1500);tick();
 </script></body></html>"""

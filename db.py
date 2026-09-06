@@ -33,16 +33,12 @@ def init_db():
             winner TEXT,
             pnl REAL DEFAULT 0
         )""")
-        # Safe migrations from v0.2.
         extra = {
-            "start_twap":"REAL",
-            "entry_twap":"REAL",
-            "entry_move_bps":"REAL",
-            "entry_seconds_left":"INTEGER",
-            "entry_spread":"REAL",
-            "entry_liquidity":"REAL",
-            "entry_feed_quality":"TEXT",
-            "resolved_ts":"INTEGER",
+            "start_twap":"REAL","entry_twap":"REAL","entry_move_bps":"REAL",
+            "entry_seconds_left":"INTEGER","entry_spread":"REAL","entry_liquidity":"REAL",
+            "entry_feed_quality":"TEXT","resolved_ts":"INTEGER",
+            "raw_model_probability":"REAL","market_implied_probability":"REAL",
+            "blended_probability":"REAL","model_market_gap":"REAL","strategy_version":"TEXT"
         }
         for n,d in extra.items():
             _ensure_col(c,"trades",n,d)
@@ -51,12 +47,9 @@ def init_db():
                      ON trades(market_id)""")
 
         c.execute("""CREATE TABLE IF NOT EXISTS price_obs(
-            ts REAL NOT NULL,
-            price REAL NOT NULL,
-            source TEXT NOT NULL,
+            ts REAL NOT NULL, price REAL NOT NULL, source TEXT NOT NULL,
             source_count INTEGER DEFAULT 1
         )""")
-        _ensure_col(c,"price_obs","source_count","INTEGER DEFAULT 1")
         c.execute("""CREATE INDEX IF NOT EXISTS idx_price_ts ON price_obs(ts)""")
 
         c.execute("""CREATE TABLE IF NOT EXISTS market_refs(
@@ -68,10 +61,30 @@ def init_db():
             created_ts INTEGER NOT NULL
         )""")
 
-        c.execute("""CREATE TABLE IF NOT EXISTS events(
+        c.execute("""CREATE TABLE IF NOT EXISTS signal_log(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts INTEGER NOT NULL,
-            level TEXT NOT NULL,
-            message TEXT NOT NULL
+            market_id TEXT NOT NULL,
+            market_slug TEXT NOT NULL,
+            seconds_left INTEGER NOT NULL,
+            move_bps REAL NOT NULL,
+            up_ask REAL NOT NULL,
+            down_ask REAL NOT NULL,
+            raw_up_probability REAL NOT NULL,
+            blended_up_probability REAL NOT NULL,
+            chosen_side TEXT,
+            chosen_probability REAL,
+            market_price REAL,
+            edge REAL,
+            action TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            winner TEXT
+        )""")
+        c.execute("""CREATE INDEX IF NOT EXISTS idx_signal_market
+                     ON signal_log(market_slug)""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS events(
+            ts INTEGER NOT NULL, level TEXT NOT NULL, message TEXT NOT NULL
         )""")
 
 def log(level, message):
