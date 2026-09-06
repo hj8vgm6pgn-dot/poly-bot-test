@@ -1,42 +1,52 @@
-# BTC 5-Minute Polymarket Bot v0.1
+# BTC 5-Minute Polymarket Bot v0.2
 
-This is a paper-trading-first prototype with an iPhone-friendly web dashboard.
+v0.2 automatically discovers the current Polymarket BTC Up/Down 5-minute market,
+reads its CLOB order books, builds a proxy 60-second BTC TWAP, paper-trades the
+configured strategy, and later scores the trade using Polymarket's actual resolved outcome.
 
-## Included
-- Polymarket CLOB order-book reader
-- BTC 5m decision engine
-- 120s to 30s trade window
-- minimum edge filter
-- maximum entry-price filter
-- spread/liquidity filters
-- one trade per market
-- bankroll-based sizing
-- daily loss stop
-- emergency STOP/RESUME
-- SQLite trade log
-- mobile dashboard
+## New in v0.2
 
-## Not yet enabled
-Live order placement is intentionally disabled in v0.1.
-Automatic Chainlink Data Streams ingestion and automatic 5m market discovery are the next integration steps.
+- Automatic market discovery using the predictable `btc-updown-5m-{unix_start}` slug.
+- Automatic UP/DOWN token extraction through Polymarket Gamma API.
+- Background process runs continuously on Railway.
+- Automatic CLOB order-book monitoring.
+- Proxy 60-second TWAP built from Coinbase BTC-USD spot samples.
+- Automatic paper entries.
+- Automatic result settlement from Polymarket after the market closes.
+- Win rate and P&L dashboard.
+- Emergency stop/resume.
+- `railway.toml` included so Railway uses `$PORT` automatically.
 
-## Run
-1. Install Python 3.11+
-2. `python -m venv .venv`
-3. Activate the venv
-4. `pip install -r requirements.txt`
-5. Copy `.env.example` to `.env`
-6. `python run.py`
-7. Open `http://127.0.0.1:8000`
+## Important limitation
 
-## Market input
-POST `/api/market` with:
-`market_id`, `up_token_id`, `down_token_id`, `start_ts`, `end_ts`, `start_twap`.
+The proxy TWAP is **NOT the Chainlink BTC/USD 60-second TWAP that Polymarket uses
+for settlement**. v0.2 is for paper testing and data collection only.
 
-## TWAP input
-POST `/api/twap` with:
-`price` and optional Unix `timestamp`.
+Before live trading, replace the proxy feed with authenticated Chainlink Data Streams
+and validate the signal against a sufficiently large sample.
 
-Important: current 5-minute BTC Polymarket resolution uses Chainlink BTC/USD 60-second TWAP, so a spot-only feed is not sufficient for final production use.
+## Railway upgrade
 
-Never paste a wallet seed phrase or private key into chat.
+Upload/replace all files in your existing GitHub repo. Railway should redeploy automatically.
+
+Keep the existing public domain. `railway.toml` sets:
+
+`uvicorn app:app --host 0.0.0.0 --port $PORT`
+
+Recommended Railway variables:
+
+- `BOT_MODE=paper`
+- `STARTING_BANKROLL=1000`
+- `RISK_PER_TRADE_PCT=1`
+- `MAX_DAILY_LOSS_PCT=5`
+- `MIN_EDGE=0.08`
+- `MAX_ENTRY_PRICE=0.72`
+- `MIN_SECONDS_LEFT=30`
+- `MAX_SECONDS_LEFT=120`
+- `MAX_SPREAD=0.05`
+- `MIN_BOOK_LIQUIDITY_USD=50`
+- `MIN_ABS_TWAP_MOVE_BPS=2`
+- `PRICE_FEED_MODE=proxy`
+- `BOT_POLL_SECONDS=2`
+
+Never put a seed phrase or wallet private key in GitHub.
