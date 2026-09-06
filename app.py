@@ -258,13 +258,61 @@ async def stats():
             "win_rate":wins/n if n else 0,"total_pnl":pnl,
             "avg_entry_edge":avg_edge,"avg_lag_score":avg_lag}
 
+
+@app.get("/api/public")
+async def public_snapshot():
+    """Single public read-only endpoint for remote monitoring."""
+    with conn() as c:
+        trade_rows=c.execute(
+            "SELECT * FROM trades ORDER BY id DESC LIMIT 10"
+        ).fetchall()
+        stat_rows=c.execute(
+            "SELECT * FROM trades WHERE status='CLOSED' AND strategy_version='0.5'"
+        ).fetchall()
+
+    n=len(stat_rows)
+    wins=sum(1 for r in stat_rows if float(r["pnl"])>0)
+    pnl=sum(float(r["pnl"]) for r in stat_rows)
+    avg_edge=sum(float(r["edge"]) for r in stat_rows)/n if n else 0
+    avg_lag=sum(float(r["lag_score"] or 0) for r in stat_rows)/n if n else 0
+
+    snapshot=dict(last_status)
+    snapshot["performance"]={
+        "closed_trades":n,
+        "wins":wins,
+        "losses":n-wins,
+        "win_rate":wins/n if n else 0,
+        "total_pnl":pnl,
+        "avg_entry_edge":avg_edge,
+        "avg_lag_score":avg_lag
+    }
+    snapshot["recent_trades"]=[dict(r) for r in trade_rows]
+    snapshot["server_ts"]=int(time.time())
+    snapshot["monitoring_version"]="0.5.1"
+    return snapshot
+
+@app.get("/api/healthz")
+async def healthz():
+    market_slug=None
+    if isinstance(last_status,dict):
+        m=last_status.get("market")
+        if isinstance(m,dict):
+            market_slug=m.get("slug")
+    return {
+        "ok": True,
+        "version": "0.5.1",
+        "mode": MODE,
+        "server_ts": int(time.time()),
+        "market": market_slug
+    }
+
 @app.get("/",response_class=HTMLResponse)
 async def dashboard():
     return HTML
 
 HTML=r"""<!doctype html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>BTC 5M Bot v0.5</title>
+<title>BTC 5M Bot v0.5.1</title>
 <style>
 body{font-family:-apple-system;background:#090c0f;color:#f7f7f8;margin:0;padding:20px}
 .wrap{max-width:680px;margin:auto}.card{background:#171b20;border:1px solid #252b33;border-radius:20px;padding:18px;margin:12px 0}
@@ -274,7 +322,7 @@ h1{font-size:28px}.big{font-size:34px;font-weight:800}.grid{display:grid;grid-te
 button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;width:100%}.stop{background:#ef4444;color:white}.go{background:#22c55e;color:#07140b}
 .trade{font-size:13px;padding:9px 0;border-bottom:1px solid #293039}
 </style></head><body><div class="wrap">
-<h1>BTC 5M Bot <span class="pill">PAPER · v0.5</span></h1>
+<h1>BTC 5M Bot <span class="pill">PAPER · v0.5.1</span></h1>
 <div class="card"><div class="muted">Current market</div><div id="market">Starting…</div><div id="feed" class="warn small"></div><div id="quality" class="muted small"></div></div>
 <div class="card"><div class="muted">Current signal</div><div id="sig" class="big">Starting…</div><div id="why"></div><div id="blocked" class="warn"></div><div id="passes" class="muted small"></div></div>
 <div class="grid"><div class="card"><div class="muted">Time left</div><div id="time" class="big">—</div></div><div class="card"><div class="muted">TWAP move</div><div id="move" class="big">—</div></div></div>
