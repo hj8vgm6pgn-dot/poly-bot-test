@@ -23,6 +23,7 @@ def estimate_up_probability(start_twap, current_twap, seconds_left, recent_vol_b
 def decide(start_twap,current_twap,seconds_left,up_ask,down_ask,
            spread_up,spread_down,liquidity_up,liquidity_down,recent_vol_bps,
            min_edge,max_entry,min_secs,max_secs,max_spread,min_liquidity,min_abs_move_bps):
+
     if not (min_secs <= seconds_left <= max_secs):
         return Signal("SKIP",None,.5,None,0,"Outside trade window")
 
@@ -39,11 +40,11 @@ def decide(start_twap,current_twap,seconds_left,up_ask,down_ask,
     edge = prob-px
 
     if spr > max_spread:
-        return Signal("SKIP",side,prob,px,edge,"Spread too wide")
+        return Signal("SKIP",side,prob,px,edge,f"Spread too wide ({spr:.3f})")
     if liq < min_liquidity:
-        return Signal("SKIP",side,prob,px,edge,"Liquidity too low")
+        return Signal("SKIP",side,prob,px,edge,f"Liquidity too low (${liq:.0f})")
     if px > max_entry:
-        return Signal("SKIP",side,prob,px,edge,"Entry price too high")
+        return Signal("SKIP",side,prob,px,edge,f"Entry price too high ({px:.2f})")
     if edge < min_edge:
-        return Signal("SKIP",side,prob,px,edge,"Edge too small")
+        return Signal("SKIP",side,prob,px,edge,f"Edge too small ({edge:.1%})")
     return Signal("BUY",side,prob,px,edge,"All filters passed")
