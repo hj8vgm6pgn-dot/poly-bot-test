@@ -3,107 +3,105 @@ from math import exp
 
 @dataclass
 class Signal:
-    action: str
-    side: str | None
-    probability: float
-    market_price: float | None
-    edge: float
-    reason: str
-    raw_up_probability: float
-    blended_up_probability: float
-    market_up_probability: float
-    model_market_gap: float
+    action:str
+    side:str|None
+    probability:float
+    market_price:float|None
+    edge:float
+    reason:str
+    raw_up_probability:float
+    blended_up_probability:float
+    market_up_probability:float
+    model_market_gap:float
+    lag_score:float
+    lag_direction:str
+    filters_passed:int
+    filters_total:int
 
+def clamp(x,lo,hi): return max(lo,min(hi,x))
 def logistic(x):
-    return 1 / (1 + exp(-max(-12, min(12, x))))
+    x=max(-12,min(12,x))
+    return 1/(1+exp(-x))
 
-def clamp(x, lo, hi):
-    return max(lo, min(hi, x))
+def market_up_probability(up_ask,down_ask):
+    t=up_ask+down_ask
+    return clamp(up_ask/t if t>0 else .5,.01,.99)
 
-def estimate_raw_up_probability(start_twap, current_twap, seconds_left, recent_vol_bps):
-    move_bps = (current_twap / start_twap - 1) * 10000
-    vol = max(recent_vol_bps, 1.5)
-    time_scale = max(seconds_left, 10) ** 0.5 / (120 ** 0.5)
-    z = move_bps / (vol * max(0.45, time_scale))
-    return logistic(0.55 * z)
+def raw_probability(move_bps,seconds_left,m5,m10,m20,accel,imb):
+    tf=max(.35,(seconds_left/120)**.5)
+    directional=.55*move_bps+.30*m10+.20*m20+.25*accel+2.0*imb
+    return logistic(directional/(3.5*tf))
 
-def fair_market_up(up_ask, down_ask):
-    # Convert two asks into a normalized market-implied probability.
-    # This reduces the distortion caused by the bid/ask overround.
-    total = up_ask + down_ask
-    if total <= 0:
-        return 0.5
-    return clamp(up_ask / total, 0.01, 0.99)
+def _norm(x,scale): return clamp(x/scale,-1,1)
 
-def decide(start_twap,current_twap,seconds_left,up_ask,down_ask,
-           spread_up,spread_down,liquidity_up,liquidity_down,recent_vol_bps,
-           min_edge,max_entry,min_secs,max_secs,max_spread,min_liquidity,min_abs_move_bps,
-           model_prob_cap=0.90, market_blend_weight=0.45, max_model_market_gap=0.30,
-           min_entry_price=0.08, max_entry_price_hard=0.92,
-           extreme_price_threshold=0.12, extreme_min_move_bps=6.0,
-           extreme_min_seconds_left=45, min_model_probability=0.58):
+def lag_score(m5,m10,m20,accel,imb,contract_velocity):
+    spot=.50*_norm(m5,3)+.30*_norm(m10,5)+.20*_norm(m20,8)
+    acc=_norm(accel,2.5)
+    book=clamp(imb,-1,1)
+    vel=_norm(contract_velocity,.08)
+    directional=.35*spot+.20*acc+.20*book+.25*vel
+    direction="UP" if directional>=0 else "DOWN"
+    strength=abs(directional)
+    underlying=abs(.35*spot+.20*acc+.20*book)
+    contract_follow=abs(.25*vel)
+    lag_component=clamp(underlying-.35*contract_follow,0,1)
+    return clamp(.55*strength+.45*lag_component,0,1),direction
 
-    raw_up = estimate_raw_up_probability(start_twap,current_twap,seconds_left,recent_vol_bps)
-    raw_up = clamp(raw_up, 1-model_prob_cap, model_prob_cap)
+def decide(*,start_twap,current_twap,seconds_left,up_ask,down_ask,
+           spread_up,spread_down,liq_up,liq_down,m5,m10,m20,accel,
+           book_imbalance,contract_velocity,source_count,source_disagreement_bps,
+           min_edge,max_entry,min_entry,min_secs,max_secs,max_spread,min_liq,
+           min_abs_move,min_model_prob,model_prob_cap,market_blend_weight,
+           max_model_market_gap,lag_min_score,lag_strong_score,
+           max_source_disagreement_bps,min_active_sources,
+           extreme_price_threshold,extreme_min_move_bps,extreme_min_seconds_left):
 
-    market_up = fair_market_up(up_ask, down_ask)
-    blended_up = (1-market_blend_weight)*raw_up + market_blend_weight*market_up
-    blended_up = clamp(blended_up, 1-model_prob_cap, model_prob_cap)
-    gap = abs(raw_up - market_up)
+    move_bps=(current_twap/start_twap-1)*10000
+    mkt_up=market_up_probability(up_ask,down_ask)
+    raw_up=clamp(raw_probability(move_bps,seconds_left,m5,m10,m20,accel,book_imbalance),
+                 1-model_prob_cap,model_prob_cap)
+    lag,lag_dir=lag_score(m5,m10,m20,accel,book_imbalance,contract_velocity)
+    blend_up=clamp((1-market_blend_weight)*raw_up+market_blend_weight*mkt_up,
+                   1-model_prob_cap,model_prob_cap)
+    gap=abs(raw_up-mkt_up)
 
-    if not (min_secs <= seconds_left <= max_secs):
-        return Signal("SKIP",None,.5,None,0,"Outside trade window",
-                      raw_up,blended_up,market_up,gap)
+    candidates=[("UP",blend_up,raw_up,up_ask,spread_up,liq_up),
+                ("DOWN",1-blend_up,1-raw_up,down_ask,spread_down,liq_down)]
+    side,prob,raw_side,px,spr,liq=max(candidates,key=lambda x:x[1]-x[3])
+    edge=prob-px
 
-    move_bps = (current_twap/start_twap-1)*10000
-    if abs(move_bps) < min_abs_move_bps:
-        return Signal("SKIP",None,.5,None,0,f"TWAP move too small ({move_bps:.2f} bps)",
-                      raw_up,blended_up,market_up,gap)
-
-    if gap > max_model_market_gap:
-        return Signal("SKIP",None,blended_up,None,0,
-                      f"Model/market disagreement too large ({gap:.1%})",
-                      raw_up,blended_up,market_up,gap)
-
-    candidates = [
-        ("UP", blended_up, raw_up, up_ask, spread_up, liquidity_up),
-        ("DOWN", 1-blended_up, 1-raw_up, down_ask, spread_down, liquidity_down),
+    checks=[
+        (min_secs<=seconds_left<=max_secs,"trade window"),
+        (source_count>=min_active_sources,"source count"),
+        (source_disagreement_bps<=max_source_disagreement_bps,"source agreement"),
+        (abs(move_bps)>=min_abs_move,"TWAP move"),
+        (spr<=max_spread,"spread"),
+        (liq>=min_liq,"liquidity"),
+        (min_entry<=px<=max_entry,"entry price"),
+        (raw_side>=min_model_prob,"model confidence"),
+        (edge>=min_edge,"edge"),
+        (lag>=lag_min_score,"lag score"),
+        (side==lag_dir,"lag direction")
     ]
-    side,prob,raw_side_prob,px,spr,liq = max(candidates,key=lambda x:x[1]-x[3])
-    edge = prob-px
+    passed=sum(1 for ok,_ in checks if ok)
 
-    if raw_side_prob < min_model_probability:
-        return Signal("SKIP",side,prob,px,edge,
-                      f"Raw model confidence too low ({raw_side_prob:.1%})",
-                      raw_up,blended_up,market_up,gap)
-
-    if spr > max_spread:
-        return Signal("SKIP",side,prob,px,edge,f"Spread too wide ({spr:.3f})",
-                      raw_up,blended_up,market_up,gap)
-
-    if liq < min_liquidity:
-        return Signal("SKIP",side,prob,px,edge,f"Liquidity too low (${liq:.0f})",
-                      raw_up,blended_up,market_up,gap)
-
-    if px < min_entry_price or px > max_entry_price_hard:
-        return Signal("SKIP",side,prob,px,edge,
-                      f"Extreme market price blocked ({px:.3f})",
-                      raw_up,blended_up,market_up,gap)
-
-    # Extra protection around penny/lottery prices.
-    if px <= extreme_price_threshold:
-        if abs(move_bps) < extreme_min_move_bps or seconds_left < extreme_min_seconds_left:
-            return Signal("SKIP",side,prob,px,edge,
-                          "Extreme-price setup lacks enough move/time confirmation",
-                          raw_up,blended_up,market_up,gap)
-
-    if px > max_entry:
-        return Signal("SKIP",side,prob,px,edge,f"Entry price too high ({px:.3f})",
-                      raw_up,blended_up,market_up,gap)
-
-    if edge < min_edge:
-        return Signal("SKIP",side,prob,px,edge,f"Blended edge too small ({edge:.1%})",
-                      raw_up,blended_up,market_up,gap)
-
-    return Signal("BUY",side,prob,px,edge,"All v0.4 filters passed",
-                  raw_up,blended_up,market_up,gap)
+    if not checks[0][0]: reason="Outside trade window"
+    elif not checks[1][0]: reason=f"Not enough active sources ({source_count:.1f})"
+    elif not checks[2][0]: reason=f"Exchange disagreement too high ({source_disagreement_bps:.2f} bps)"
+    elif not checks[3][0]: reason=f"TWAP move too small ({move_bps:.2f} bps)"
+    elif not checks[4][0]: reason=f"Spread too wide ({spr:.3f})"
+    elif not checks[5][0]: reason=f"Liquidity too low (${liq:.0f})"
+    elif not checks[6][0]: reason=f"Entry price outside allowed range ({px:.3f})"
+    elif gap>max_model_market_gap and lag<lag_strong_score:
+        reason=f"Model/market gap {gap:.1%} needs stronger lag confirmation"
+    elif not checks[7][0]: reason=f"Model confidence too low ({raw_side:.1%})"
+    elif not checks[8][0]: reason=f"Edge too small ({edge:.1%})"
+    elif not checks[9][0]: reason=f"Lag score too weak ({lag:.2f})"
+    elif not checks[10][0]: reason=f"Lag points {lag_dir}, candidate is {side}"
+    else:
+        if px<=extreme_price_threshold and (abs(move_bps)<extreme_min_move_bps or seconds_left<extreme_min_seconds_left):
+            reason="Extreme-price setup lacks confirmation"
+        else:
+            return Signal("BUY",side,prob,px,edge,"Lag + microstructure filters passed",
+                          raw_up,blend_up,mkt_up,gap,lag,lag_dir,passed,len(checks))
+    return Signal("SKIP",side,prob,px,edge,reason,raw_up,blend_up,mkt_up,gap,lag,lag_dir,passed,len(checks))

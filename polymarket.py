@@ -1,25 +1,26 @@
 import json, httpx, time
+from db import conn
 
-GAMMA = "https://gamma-api.polymarket.com"
-CLOB = "https://clob.polymarket.com"
+GAMMA="https://gamma-api.polymarket.com"
+CLOB="https://clob.polymarket.com"
 
 def _loads(v):
-    if isinstance(v, list): return v
+    if isinstance(v,list): return v
     if not v: return []
     try: return json.loads(v)
     except Exception: return []
 
 async def event_by_slug(slug):
-    async with httpx.AsyncClient(timeout=7, follow_redirects=True) as client:
-        r = await client.get(f"{GAMMA}/events/slug/{slug}")
-        if r.status_code == 404: return None
+    async with httpx.AsyncClient(timeout=7,follow_redirects=True) as client:
+        r=await client.get(f"{GAMMA}/events/slug/{slug}")
+        if r.status_code==404: return None
         r.raise_for_status()
         return r.json()
 
 async def discover_current_btc5m(now=None):
-    now = int(now or time.time())
-    base = (now // 300) * 300
-    for start_ts in (base, base+300, base-300):
+    now=int(now or time.time())
+    base=(now//300)*300
+    for start_ts in (base,base+300,base-300):
         slug=f"btc-updown-5m-{start_ts}"
         try: ev=await event_by_slug(slug)
         except Exception: continue
@@ -34,13 +35,11 @@ async def discover_current_btc5m(now=None):
         up=mapping.get("UP") or mapping.get("YES")
         down=mapping.get("DOWN") or mapping.get("NO")
         if not up or not down: continue
-        if start_ts <= now < start_ts+300:
-            return {
-                "market_id":str(m.get("conditionId") or m.get("id") or slug),
-                "slug":slug,"title":ev.get("title") or "BTC Up or Down 5m",
-                "start_ts":start_ts,"end_ts":start_ts+300,
-                "up_token_id":str(up),"down_token_id":str(down)
-            }
+        if start_ts<=now<start_ts+300:
+            return {"market_id":str(m.get("conditionId") or m.get("id") or slug),
+                    "slug":slug,"title":ev.get("title") or "BTC Up or Down 5m",
+                    "start_ts":start_ts,"end_ts":start_ts+300,
+                    "up_token_id":str(up),"down_token_id":str(down)}
     return None
 
 async def get_book(token_id):
@@ -55,8 +54,41 @@ def book_metrics(book):
     ask=asks[0][0] if asks else 1.0
     bid=bids[0][0] if bids else 0.0
     spread=max(0,ask-bid)
-    liq=sum(px*sz for px,sz in asks if px<=ask+0.05)
-    return ask,bid,spread,liq
+    ask_depth=sum(px*sz for px,sz in asks if px<=ask+0.05)
+    bid_depth=sum(px*sz for px,sz in bids if px>=max(0,bid-0.05))
+    return ask,bid,spread,ask_depth,bid_depth
+
+def store_book_obs(slug,up,down):
+    ua,ub,_,uad,ubd=up
+    da,db,_,dad,dbd=down
+    with conn() as c:
+        c.execute("""INSERT INTO book_obs(ts,market_slug,up_bid,up_ask,down_bid,down_ask,
+                     up_bid_depth,up_ask_depth,down_bid_depth,down_ask_depth)
+                     VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                  (time.time(),slug,ub,ua,db,da,ubd,uad,dbd,dad))
+        c.execute("DELETE FROM book_obs WHERE ts<?",(time.time()-86400,))
+
+def contract_velocity(slug,seconds=10):
+    now=time.time()
+    with conn() as c:
+        recent=c.execute("""SELECT ts,up_ask,down_ask FROM book_obs
+                            WHERE market_slug=? AND ts<=? ORDER BY ts DESC LIMIT 1""",
+                         (slug,now)).fetchone()
+        old=c.execute("""SELECT ts,up_ask,down_ask FROM book_obs
+                         WHERE market_slug=? AND ts<=? AND ts>=?
+                         ORDER BY ts DESC LIMIT 1""",
+                      (slug,now-seconds,now-seconds-4)).fetchone()
+    if not recent or not old:
+        return 0.0
+    return ((float(recent["up_ask"])-float(old["up_ask"])) -
+            (float(recent["down_ask"])-float(old["down_ask"])))
+
+def book_imbalance(up,down):
+    _,_,_,uad,ubd=up
+    _,_,_,dad,dbd=down
+    up_pressure=(ubd-uad)/(ubd+uad+1e-9)
+    down_pressure=(dbd-dad)/(dbd+dad+1e-9)
+    return max(-1.0,min(1.0,(up_pressure-down_pressure)/2))
 
 async def resolved_winner(slug):
     ev=await event_by_slug(slug)

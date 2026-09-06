@@ -38,7 +38,10 @@ def init_db():
             "entry_seconds_left":"INTEGER","entry_spread":"REAL","entry_liquidity":"REAL",
             "entry_feed_quality":"TEXT","resolved_ts":"INTEGER",
             "raw_model_probability":"REAL","market_implied_probability":"REAL",
-            "blended_probability":"REAL","model_market_gap":"REAL","strategy_version":"TEXT"
+            "blended_probability":"REAL","model_market_gap":"REAL","strategy_version":"TEXT",
+            "lag_score":"REAL","book_imbalance":"REAL","contract_velocity":"REAL",
+            "spot_mom_5":"REAL","spot_mom_10":"REAL","spot_mom_20":"REAL",
+            "spot_acceleration":"REAL","source_disagreement_bps":"REAL"
         }
         for n,d in extra.items():
             _ensure_col(c,"trades",n,d)
@@ -48,8 +51,10 @@ def init_db():
 
         c.execute("""CREATE TABLE IF NOT EXISTS price_obs(
             ts REAL NOT NULL, price REAL NOT NULL, source TEXT NOT NULL,
-            source_count INTEGER DEFAULT 1
+            source_count INTEGER DEFAULT 1,
+            source_disagreement_bps REAL DEFAULT 0
         )""")
+        _ensure_col(c,"price_obs","source_disagreement_bps","REAL DEFAULT 0")
         c.execute("""CREATE INDEX IF NOT EXISTS idx_price_ts ON price_obs(ts)""")
 
         c.execute("""CREATE TABLE IF NOT EXISTS market_refs(
@@ -60,6 +65,17 @@ def init_db():
             ref_age_seconds REAL,
             created_ts INTEGER NOT NULL
         )""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS book_obs(
+            ts REAL NOT NULL,
+            market_slug TEXT NOT NULL,
+            up_bid REAL, up_ask REAL,
+            down_bid REAL, down_ask REAL,
+            up_bid_depth REAL, up_ask_depth REAL,
+            down_bid_depth REAL, down_ask_depth REAL
+        )""")
+        c.execute("""CREATE INDEX IF NOT EXISTS idx_book_market_ts
+                     ON book_obs(market_slug,ts)""")
 
         c.execute("""CREATE TABLE IF NOT EXISTS signal_log(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,10 +88,19 @@ def init_db():
             down_ask REAL NOT NULL,
             raw_up_probability REAL NOT NULL,
             blended_up_probability REAL NOT NULL,
+            market_up_probability REAL,
             chosen_side TEXT,
             chosen_probability REAL,
             market_price REAL,
             edge REAL,
+            lag_score REAL,
+            book_imbalance REAL,
+            contract_velocity REAL,
+            spot_mom_5 REAL,
+            spot_mom_10 REAL,
+            spot_mom_20 REAL,
+            spot_acceleration REAL,
+            source_disagreement_bps REAL,
             action TEXT NOT NULL,
             reason TEXT NOT NULL,
             winner TEXT
