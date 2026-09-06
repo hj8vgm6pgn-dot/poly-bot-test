@@ -46,3 +46,18 @@ This exposes live fields including lag score/direction, TWAP move, UP/DOWN price
 5s/10s/20s momentum, filters passed, reason, edge, bankroll, and source quality.
 
 No strategy logic, thresholds, position sizing, or paper-trading behavior changed.
+
+
+## v0.5.4 no-cache remote monitoring
+
+Adds `/monitor.txt`, a fresh plain-text JSON snapshot of the current bot state.
+
+The endpoint sends:
+- `Cache-Control: no-store, no-cache, must-revalidate, max-age=0`
+- `Pragma: no-cache`
+- `Expires: 0`
+
+The main `/` dashboard is also returned with no-cache headers and includes a normal
+link to `/monitor.txt` so remote readers can discover and follow it from the dashboard.
+
+No strategy logic, thresholds, sizing, or paper-trading behavior changed.
