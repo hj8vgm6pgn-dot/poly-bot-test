@@ -1,12 +1,19 @@
-import sqlite3
+import sqlite3, time
 from pathlib import Path
 
 DB = Path(__file__).with_name("bot.sqlite3")
 
 def conn():
-    c = sqlite3.connect(DB, timeout=15, check_same_thread=False)
+    c = sqlite3.connect(DB, timeout=20, check_same_thread=False)
     c.row_factory = sqlite3.Row
     return c
+
+def _cols(c, table):
+    return {r["name"] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+
+def _ensure_col(c, table, name, decl):
+    if name not in _cols(c, table):
+        c.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
 def init_db():
     with conn() as c:
@@ -26,13 +33,41 @@ def init_db():
             winner TEXT,
             pnl REAL DEFAULT 0
         )""")
+        # Safe migrations from v0.2.
+        extra = {
+            "start_twap":"REAL",
+            "entry_twap":"REAL",
+            "entry_move_bps":"REAL",
+            "entry_seconds_left":"INTEGER",
+            "entry_spread":"REAL",
+            "entry_liquidity":"REAL",
+            "entry_feed_quality":"TEXT",
+            "resolved_ts":"INTEGER",
+        }
+        for n,d in extra.items():
+            _ensure_col(c,"trades",n,d)
+
         c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_market
                      ON trades(market_id)""")
+
         c.execute("""CREATE TABLE IF NOT EXISTS price_obs(
             ts REAL NOT NULL,
             price REAL NOT NULL,
-            source TEXT NOT NULL
+            source TEXT NOT NULL,
+            source_count INTEGER DEFAULT 1
         )""")
+        _ensure_col(c,"price_obs","source_count","INTEGER DEFAULT 1")
+        c.execute("""CREATE INDEX IF NOT EXISTS idx_price_ts ON price_obs(ts)""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS market_refs(
+            market_slug TEXT PRIMARY KEY,
+            start_ts INTEGER NOT NULL,
+            start_twap REAL,
+            capture_method TEXT,
+            ref_age_seconds REAL,
+            created_ts INTEGER NOT NULL
+        )""")
+
         c.execute("""CREATE TABLE IF NOT EXISTS events(
             ts INTEGER NOT NULL,
             level TEXT NOT NULL,
@@ -40,9 +75,8 @@ def init_db():
         )""")
 
 def log(level, message):
-    import time
     with conn() as c:
         c.execute("INSERT INTO events(ts,level,message) VALUES(?,?,?)",
                   (int(time.time()), level, message))
         c.execute("""DELETE FROM events WHERE rowid NOT IN
-                     (SELECT rowid FROM events ORDER BY rowid DESC LIMIT 500)""")
+                     (SELECT rowid FROM events ORDER BY rowid DESC LIMIT 1000)""")

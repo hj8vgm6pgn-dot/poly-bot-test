@@ -44,7 +44,7 @@ def decide(start_twap,current_twap,seconds_left,up_ask,down_ask,
     if liq < min_liquidity:
         return Signal("SKIP",side,prob,px,edge,f"Liquidity too low (${liq:.0f})")
     if px > max_entry:
-        return Signal("SKIP",side,prob,px,edge,f"Entry price too high ({px:.2f})")
+        return Signal("SKIP",side,prob,px,edge,f"Entry price too high ({px:.3f})")
     if edge < min_edge:
         return Signal("SKIP",side,prob,px,edge,f"Edge too small ({edge:.1%})")
     return Signal("BUY",side,prob,px,edge,"All filters passed")
