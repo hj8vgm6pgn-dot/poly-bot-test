@@ -26,3 +26,12 @@ New read-only monitoring endpoints:
 - `/api/healthz` — lightweight health check.
 
 These endpoints do not place orders and do not expose wallet secrets. They are for remote monitoring without relying on the browser dashboard's JavaScript rendering.
+
+
+## v0.5.2 monitoring compatibility patch
+
+The existing dashboard URL `/` now contains a server-rendered **Remote monitor snapshot**
+with the current bot state as JSON. This makes the live state readable even when a remote
+reader cannot execute the dashboard JavaScript or access a separate API route.
+
+No strategy thresholds, candidate logic, or paper-trading behavior were changed.

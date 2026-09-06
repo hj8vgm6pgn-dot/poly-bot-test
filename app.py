@@ -1,4 +1,4 @@
-import os,time,asyncio
+import os,time,asyncio,json
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -288,7 +288,7 @@ async def public_snapshot():
     }
     snapshot["recent_trades"]=[dict(r) for r in trade_rows]
     snapshot["server_ts"]=int(time.time())
-    snapshot["monitoring_version"]="0.5.1"
+    snapshot["monitoring_version"]="0.5.2"
     return snapshot
 
 @app.get("/api/healthz")
@@ -300,7 +300,7 @@ async def healthz():
             market_slug=m.get("slug")
     return {
         "ok": True,
-        "version": "0.5.1",
+        "version": "0.5.2",
         "mode": MODE,
         "server_ts": int(time.time()),
         "market": market_slug
@@ -308,11 +308,32 @@ async def healthz():
 
 @app.get("/",response_class=HTMLResponse)
 async def dashboard():
-    return HTML
+    snapshot = dict(last_status) if isinstance(last_status, dict) else {}
+    monitor = {
+        "version": "0.5.2",
+        "mode": MODE,
+        "server_ts": int(time.time()),
+        "market": snapshot.get("market"),
+        "seconds_left": snapshot.get("seconds_left"),
+        "move_bps": snapshot.get("move_bps"),
+        "up": snapshot.get("up"),
+        "down": snapshot.get("down"),
+        "momentum": snapshot.get("momentum"),
+        "book_imbalance": snapshot.get("book_imbalance"),
+        "contract_velocity": snapshot.get("contract_velocity"),
+        "signal": snapshot.get("signal"),
+        "current_quality": snapshot.get("current_quality"),
+        "start_ref_method": snapshot.get("start_ref_method"),
+        "blocked": snapshot.get("blocked"),
+        "bankroll": snapshot.get("bankroll"),
+        "next_stake": snapshot.get("next_stake"),
+    }
+    monitor_json = json.dumps(monitor, separators=(",", ":"), default=str)
+    return HTML.replace("__REMOTE_MONITOR_JSON__", monitor_json)
 
 HTML=r"""<!doctype html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>BTC 5M Bot v0.5.1</title>
+<title>BTC 5M Bot v0.5.2</title>
 <style>
 body{font-family:-apple-system;background:#090c0f;color:#f7f7f8;margin:0;padding:20px}
 .wrap{max-width:680px;margin:auto}.card{background:#171b20;border:1px solid #252b33;border-radius:20px;padding:18px;margin:12px 0}
@@ -322,7 +343,7 @@ h1{font-size:28px}.big{font-size:34px;font-weight:800}.grid{display:grid;grid-te
 button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;width:100%}.stop{background:#ef4444;color:white}.go{background:#22c55e;color:#07140b}
 .trade{font-size:13px;padding:9px 0;border-bottom:1px solid #293039}
 </style></head><body><div class="wrap">
-<h1>BTC 5M Bot <span class="pill">PAPER · v0.5.1</span></h1>
+<h1>BTC 5M Bot <span class="pill">PAPER · v0.5.2</span></h1>
 <div class="card"><div class="muted">Current market</div><div id="market">Starting…</div><div id="feed" class="warn small"></div><div id="quality" class="muted small"></div></div>
 <div class="card"><div class="muted">Current signal</div><div id="sig" class="big">Starting…</div><div id="why"></div><div id="blocked" class="warn"></div><div id="passes" class="muted small"></div></div>
 <div class="grid"><div class="card"><div class="muted">Time left</div><div id="time" class="big">—</div></div><div class="card"><div class="muted">TWAP move</div><div id="move" class="big">—</div></div></div>
@@ -351,6 +372,10 @@ button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;w
 <div class="grid"><button class="stop" onclick="fetch('/api/stop',{method:'POST'})">STOP</button><button class="go" onclick="fetch('/api/resume',{method:'POST'})">RESUME</button></div>
 <div class="card"><b>v0.5 Performance</b><div id="stats" class="muted"></div></div>
 <div class="card"><b>Recent trades</b><div id="trades" class="muted"></div></div>
+<div class="card small" id="remote-monitor-card">
+<b>Remote monitor snapshot</b>
+<pre style="white-space:pre-wrap;word-break:break-word;color:#9ca3af">__REMOTE_MONITOR_JSON__</pre>
+</div>
 </div>
 <script>
 function money(x){return '$'+Number(x||0).toFixed(2)}
