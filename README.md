@@ -61,3 +61,23 @@ The main `/` dashboard is also returned with no-cache headers and includes a nor
 link to `/monitor.txt` so remote readers can discover and follow it from the dashboard.
 
 No strategy logic, thresholds, sizing, or paper-trading behavior changed.
+
+
+## v0.6 research strategy
+
+- PAPER ONLY; live execution remains disabled.
+- Entry observation window widened from 30–120s to 30–180s.
+- Strict lag threshold remains 0.58.
+- Candidate direction is now determined by the model first; the bot no longer
+  chooses the opposite contract simply because it is cheap.
+- Model/lag disagreement is explicitly rejected as `Direction mismatch`.
+- Extreme contracts already priced at >= 0.92 receive a clearer
+  `Market already priced` rejection unless lag evidence is strong.
+- `/monitor.txt` adds a `shadow_setup` diagnostic for skipped snapshots with
+  lag score 0.30–0.58. Shadow setups DO NOT place paper trades and do not alter
+  bankroll/performance.
+- This version is intended to collect more useful research observations without
+  weakening the strict trading threshold.
+
+Before relying on multi-day/week calibration data, mount a persistent Railway
+Volume at `/data` so `/data/bot.db` survives redeployments.

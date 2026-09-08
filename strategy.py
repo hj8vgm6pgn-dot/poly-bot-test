@@ -65,9 +65,15 @@ def decide(*,start_twap,current_twap,seconds_left,up_ask,down_ask,
                    1-model_prob_cap,model_prob_cap)
     gap=abs(raw_up-mkt_up)
 
-    candidates=[("UP",blend_up,raw_up,up_ask,spread_up,liq_up),
-                ("DOWN",1-blend_up,1-raw_up,down_ask,spread_down,liq_down)]
-    side,prob,raw_side,px,spr,liq=max(candidates,key=lambda x:x[1]-x[3])
+    # v0.6: determine model direction FIRST. Never pick the opposite side merely
+    # because its contract is cheap and therefore produces a large arithmetic edge.
+    model_dir="UP" if raw_up>=.5 else "DOWN"
+    side=model_dir
+
+    if side=="UP":
+        prob,raw_side,px,spr,liq=blend_up,raw_up,up_ask,spread_up,liq_up
+    else:
+        prob,raw_side,px,spr,liq=1-blend_up,1-raw_up,down_ask,spread_down,liq_down
     edge=prob-px
 
     checks=[
@@ -81,14 +87,17 @@ def decide(*,start_twap,current_twap,seconds_left,up_ask,down_ask,
         (raw_side>=min_model_prob,"model confidence"),
         (edge>=min_edge,"edge"),
         (lag>=lag_min_score,"lag score"),
-        (side==lag_dir,"lag direction")
+        (side==lag_dir,"direction match")
     ]
     passed=sum(1 for ok,_ in checks if ok)
 
+    # Clearer primary rejection reasons.
     if not checks[0][0]: reason="Outside trade window"
     elif not checks[1][0]: reason=f"Not enough active sources ({source_count:.1f})"
     elif not checks[2][0]: reason=f"Exchange disagreement too high ({source_disagreement_bps:.2f} bps)"
     elif not checks[3][0]: reason=f"TWAP move too small ({move_bps:.2f} bps)"
+    elif side!=lag_dir: reason=f"Direction mismatch: model {side}, lag {lag_dir}"
+    elif px>=.92 and lag<lag_strong_score: reason=f"Market already priced ({side} ask {px:.3f})"
     elif not checks[4][0]: reason=f"Spread too wide ({spr:.3f})"
     elif not checks[5][0]: reason=f"Liquidity too low (${liq:.0f})"
     elif not checks[6][0]: reason=f"Entry price outside allowed range ({px:.3f})"
@@ -97,7 +106,6 @@ def decide(*,start_twap,current_twap,seconds_left,up_ask,down_ask,
     elif not checks[7][0]: reason=f"Model confidence too low ({raw_side:.1%})"
     elif not checks[8][0]: reason=f"Edge too small ({edge:.1%})"
     elif not checks[9][0]: reason=f"Lag score too weak ({lag:.2f})"
-    elif not checks[10][0]: reason=f"Lag points {lag_dir}, candidate is {side}"
     else:
         if px<=extreme_price_threshold and (abs(move_bps)<extreme_min_move_bps or seconds_left<extreme_min_seconds_left):
             reason="Extreme-price setup lacks confirmation"
