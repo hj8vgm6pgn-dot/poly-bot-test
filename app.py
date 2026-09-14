@@ -45,7 +45,8 @@ last_logged_second=None
 def pnl_today():
     cutoff=int(time.time())-86400
     with conn() as c:
-        r=c.execute("SELECT COALESCE(SUM(pnl),0) p FROM trades WHERE ts>=?",(cutoff,)).fetchone()
+        r=c.execute("""SELECT COALESCE(SUM(pnl),0) p FROM trades
+                       WHERE ts>=? AND strategy_version='0.7-maker'""",(cutoff,)).fetchone()
     return float(r["p"])
 
 def already_traded(mid):
@@ -168,7 +169,7 @@ async def bot_loop():
             pnl=pnl_today(); bankroll=START+pnl; stake=max(1,bankroll*RISK)
             blocked=None
             if stopped: blocked="Emergency stop active"
-            elif MODE!="paper": blocked="Live execution disabled in v0.5"
+            elif MODE!="paper": blocked="Live execution disabled in v0.7-maker"
             elif pnl<=-(START*MAX_DAILY): blocked="Daily loss limit reached"
             elif already_traded(market["market_id"]) or has_order(market["market_id"]): blocked="Already ordered/traded this market"
             elif ref["capture_method"]!="exact-boundary proxy TWAP":
@@ -267,9 +268,11 @@ async def stats():
     pnl=sum(float(r["pnl"]) for r in rows)
     avg_edge=sum(float(r["edge"]) for r in rows)/n if n else 0
     avg_lag=sum(float(r["lag_score"] or 0) for r in rows)/n if n else 0
+    ms=maker_stats()
     return {"closed_trades":n,"wins":wins,"losses":n-wins,
             "win_rate":wins/n if n else 0,"total_pnl":pnl,
-            "avg_entry_edge":avg_edge,"avg_lag_score":avg_lag}
+            "avg_entry_edge":avg_edge,"avg_lag_score":avg_lag,
+            "maker":ms}
 
 
 @app.get("/api/public")
@@ -301,7 +304,7 @@ async def public_snapshot():
     }
     snapshot["recent_trades"]=[dict(r) for r in trade_rows]
     snapshot["server_ts"]=int(time.time())
-    snapshot["monitoring_version"]="0.5.4"
+    snapshot["monitoring_version"]="0.7-maker"
     return snapshot
 
 @app.get("/api/healthz")
@@ -391,7 +394,7 @@ async def monitor_txt():
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
             "Expires": "0",
-            "X-Monitor-Version": "0.6",
+            "X-Monitor-Version": "0.7-maker",
         },
     )
 
@@ -497,7 +500,7 @@ button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;w
 <div class="row"><span>Next stake</span><b id="stake">—</b></div>
 <div class="row"><span>Bankroll</span><b id="bank">—</b></div>
 </div>
-<div id="openCard" class="card" style="display:none"><div class="muted">Open paper position</div><div id="openSide" class="big"></div><div id="openDetails"></div></div>
+<div id="makerCard" class="card" style="display:none"><div class="muted">Resting maker order</div><div id="makerSide" class="big"></div><div id="makerDetails"></div></div>\n<div id="openCard" class="card" style="display:none"><div class="muted">Open paper position</div><div id="openSide" class="big"></div><div id="openDetails"></div></div>
 <div class="grid"><button class="stop" onclick="fetch('/api/stop',{method:'POST'})">STOP</button><button class="go" onclick="fetch('/api/resume',{method:'POST'})">RESUME</button></div>
 <div class="card"><b>v0.7 Maker Performance</b><div id="stats" class="muted"></div></div>
 <div class="card"><b>Recent trades</b><div id="trades" class="muted"></div></div>
@@ -531,12 +534,16 @@ mkt.textContent=pct(x.signal.market_up_probability); blend.textContent=pct(x.sig
 gap.textContent=pct(x.signal.model_market_gap); edge.textContent=pct(x.signal.edge);
 disag.textContent=bp(x.current_quality?.disagreement_bps); stake.textContent=money(x.next_stake); bank.textContent=money(x.bankroll);
 }else sig.textContent=x.message||'Waiting…';
+if(x.maker_order){makerCard.style.display='block';let o=x.maker_order;
+makerSide.textContent=`${o.side} · ${money(o.target_stake)} @ ${Number(o.limit_price).toFixed(3)}`;
+makerDetails.innerHTML=`RESTING MAKER · signal edge ${pct(o.signal_edge)} · ${o.entry_seconds_left}s at post`;
+}else makerCard.style.display='none';
 if(x.open_trade){openCard.style.display='block';let t=x.open_trade;
 openSide.textContent=`${t.side} · ${money(t.stake)} @ ${Number(t.price).toFixed(3)}`;
 openDetails.innerHTML=`Blended <b>${pct(t.blended_probability||t.probability)}</b> · edge <b>${pct(t.edge)}</b> · lag <b>${Number(t.lag_score||0).toFixed(2)}</b><br>${t.entry_seconds_left}s left · move ${Number(t.entry_move_bps||0).toFixed(2)} bp`;
 }else openCard.style.display='none';
 let st=await fetch('/api/stats').then(r=>r.json());
-stats.textContent=st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)}`:'No resolved v0.5 trades yet';
+stats.textContent=(st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)} · `:'No resolved maker trades yet · ')+`maker fills ${st.maker?.filled||0}/${st.maker?.signals_posted||0} (${((st.maker?.fill_rate||0)*100).toFixed(1)}%)`;
 let tr=await fetch('/api/trades').then(r=>r.json());
 trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% blended · ${(Number(t.edge)*100).toFixed(1)}% edge · lag ${Number(t.lag_score||0).toFixed(2)} · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
 }catch(e){sig.textContent='Dashboard reconnecting…'}}
