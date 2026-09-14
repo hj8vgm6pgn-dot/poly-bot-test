@@ -69,7 +69,7 @@ def fill_order(order,now,current_bid,current_ask,ctx):
         spot_mom_5,spot_mom_10,spot_mom_20,spot_acceleration,source_disagreement_bps,
         execution_type,maker_order_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (now,order["market_id"],order["market_slug"],order["side"],price,stake,shares,
-         order["signal_probability"],order["signal_edge"],"paper",ctx["start_twap"],ctx["entry_twap"],
+         order["signal_probability"],max(0.0,float(order["signal_probability"])-price),"paper",ctx["start_twap"],ctx["entry_twap"],
          ctx["move_bps"],ctx["seconds_left"],ctx["spread"],ctx["liquidity"],ctx["feed_quality"],
          ctx["raw_prob"],ctx["market_prob"],order["signal_probability"],ctx["model_market_gap"],
          VERSION,ctx["lag_score"],ctx["book_imbalance"],ctx["contract_velocity"],ctx["m5"],ctx["m10"],
