@@ -41,13 +41,42 @@ def init_db():
             "blended_probability":"REAL","model_market_gap":"REAL","strategy_version":"TEXT",
             "lag_score":"REAL","book_imbalance":"REAL","contract_velocity":"REAL",
             "spot_mom_5":"REAL","spot_mom_10":"REAL","spot_mom_20":"REAL",
-            "spot_acceleration":"REAL","source_disagreement_bps":"REAL"
+            "spot_acceleration":"REAL","source_disagreement_bps":"REAL",
+            "execution_type":"TEXT","maker_order_id":"INTEGER"
         }
         for n,d in extra.items():
             _ensure_col(c,"trades",n,d)
 
         c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_market
                      ON trades(market_id)""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS maker_orders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            market_id TEXT NOT NULL,
+            market_slug TEXT NOT NULL,
+            side TEXT NOT NULL,
+            limit_price REAL NOT NULL,
+            target_stake REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'RESTING',
+            signal_probability REAL NOT NULL,
+            signal_edge REAL NOT NULL,
+            posted_bid REAL,
+            posted_ask REAL,
+            last_bid REAL,
+            last_ask REAL,
+            entry_seconds_left INTEGER,
+            reprice_count INTEGER NOT NULL DEFAULT 0,
+            cancel_reason TEXT,
+            fill_model TEXT,
+            filled_ts INTEGER,
+            updated_ts INTEGER NOT NULL,
+            strategy_version TEXT NOT NULL DEFAULT '0.7-maker'
+        )""")
+        c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_maker_order_market_version
+                     ON maker_orders(market_id,strategy_version)""")
+        c.execute("""CREATE INDEX IF NOT EXISTS idx_maker_order_status
+                     ON maker_orders(status)""")
 
         c.execute("""CREATE TABLE IF NOT EXISTS price_obs(
             ts REAL NOT NULL, price REAL NOT NULL, source TEXT NOT NULL,
