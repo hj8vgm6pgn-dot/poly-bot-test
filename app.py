@@ -121,12 +121,12 @@ async def bot_loop():
                 log("INFO",f"Market detected {m['slug']}")
 
             if not market:
-                last_status={"version":"0.5","mode":MODE,"message":"Searching for current BTC 5m market…"}
+                last_status={"version":"0.7-maker","mode":MODE,"message":"Searching for current BTC 5m market…"}
                 await asyncio.sleep(POLL); continue
 
             ref=get_or_create_ref(market)
             if not ref:
-                last_status={"version":"0.5","mode":MODE,"message":"Building boundary reference…","market":market}
+                last_status={"version":"0.7-maker","mode":MODE,"message":"Building boundary reference…","market":market}
                 await asyncio.sleep(POLL); continue
 
             cur_twap,q=feed.twap_at(time.time(),60)
@@ -223,7 +223,7 @@ async def bot_loop():
                 "open_trade":open_trade(),"maker_order":resting_order(),"maker_stats":maker_stats()
             }
         except Exception as e:
-            last_status={"version":"0.5","mode":MODE,
+            last_status={"version":"0.7-maker","mode":MODE,
                          "message":f"Bot loop error: {type(e).__name__}: {e}"}
             log("ERROR",last_status["message"])
         await asyncio.sleep(POLL)
