@@ -508,7 +508,8 @@ button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;w
 <div class="row"><span>Next stake</span><b id="stake">—</b></div>
 <div class="row"><span>Bankroll</span><b id="bank">—</b></div>
 </div>
-<div id="makerCard" class="card" style="display:none"><div class="muted">Resting maker order</div><div id="makerSide" class="big"></div><div id="makerDetails"></div></div>\n<div id="openCard" class="card" style="display:none"><div class="muted">Open paper position</div><div id="openSide" class="big"></div><div id="openDetails"></div></div>
+<div id="makerCard" class="card" style="display:none"><div class="muted">Resting maker order</div><div id="makerSide" class="big"></div><div id="makerDetails"></div></div>
+<div id="openCard" class="card" style="display:none"><div class="muted">Open paper position</div><div id="openSide" class="big"></div><div id="openDetails"></div></div>
 <div class="grid"><button class="stop" onclick="fetch('/api/stop',{method:'POST'})">STOP</button><button class="go" onclick="fetch('/api/resume',{method:'POST'})">RESUME</button></div>
 <div class="card"><b>v0.7 Maker Performance</b><div id="stats" class="muted"></div></div>
 <div class="card"><b>Recent trades</b><div id="trades" class="muted"></div></div>
