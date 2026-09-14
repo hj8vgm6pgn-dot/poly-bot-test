@@ -81,3 +81,20 @@ No strategy logic, thresholds, sizing, or paper-trading behavior changed.
 
 Before relying on multi-day/week calibration data, mount a persistent Railway
 Volume at `/data` so `/data/bot.db` survives redeployments.
+
+
+## v0.7 maker-only paper execution
+
+This branch keeps the v0.6 prediction thresholds frozen and changes execution only.
+
+- PAPER ONLY.
+- Qualifying BUY signals create a resting maker order instead of filling at the ask.
+- Limit price starts at best bid, improved by one cent only when it remains strictly below the ask.
+- There is no taker fallback.
+- A paper maker order is not considered filled merely because it rests at the bid.
+- Conservative fill rule: a later observed best ask must move down to or through the resting limit.
+- Unfilled orders expire when the entry window closes or the market changes.
+- Maker orders have their own lifecycle table and fill-rate statistics.
+- Filled maker trades are tagged `strategy_version=0.7-maker` and `execution_type=MAKER`, keeping v0.6 history separate.
+
+This first implementation intentionally avoids optimistic queue-position assumptions. Partial-fill and queue-depth modelling can be added after we observe real maker fill behavior.

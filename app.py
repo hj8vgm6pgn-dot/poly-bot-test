@@ -8,6 +8,7 @@ from db import init_db,conn,log
 from price_feed import MultiProxyFeed
 from polymarket import discover_current_btc5m,get_book,book_metrics,store_book_obs,contract_velocity,book_imbalance,resolved_winner
 from strategy import decide
+from maker_execution import resting_order,has_order,maker_price,post_order,cancel_order,expire_market,evaluate_fill,update_seen,fill_order,stats as maker_stats
 
 load_dotenv(); init_db()
 
@@ -38,13 +39,20 @@ POLL=float(os.getenv("BOT_POLL_SECONDS",1))
 
 feed=MultiProxyFeed()
 market=None; stopped=False; bg_task=None
-last_status={"message":"Starting v0.5…"}
+last_status={"message":"Starting v0.7 maker-only…"}
 last_logged_second=None
 
 def pnl_today():
     cutoff=int(time.time())-86400
     with conn() as c:
-        r=c.execute("SELECT COALESCE(SUM(pnl),0) p FROM trades WHERE ts>=?",(cutoff,)).fetchone()
+        r=c.execute("""SELECT COALESCE(SUM(pnl),0) p FROM trades
+                       WHERE ts>=? AND strategy_version='0.7-maker'""",(cutoff,)).fetchone()
+    return float(r["p"])
+
+def total_pnl():
+    with conn() as c:
+        r=c.execute("""SELECT COALESCE(SUM(pnl),0) p FROM trades
+                       WHERE status='CLOSED' AND strategy_version='0.7-maker'""").fetchone()
     return float(r["p"])
 
 def already_traded(mid):
@@ -106,7 +114,7 @@ def log_signal(now,m,sig,move_bps,ua,da,moms,imb,vel,disag):
 
 async def bot_loop():
     global market,last_status,last_logged_second
-    log("INFO","v0.5 started")
+    log("INFO","v0.7 maker-only started")
     while True:
         try:
             await feed.update()
@@ -119,12 +127,12 @@ async def bot_loop():
                 log("INFO",f"Market detected {m['slug']}")
 
             if not market:
-                last_status={"version":"0.5","mode":MODE,"message":"Searching for current BTC 5m market…"}
+                last_status={"version":"0.7-maker","mode":MODE,"message":"Searching for current BTC 5m market…"}
                 await asyncio.sleep(POLL); continue
 
             ref=get_or_create_ref(market)
             if not ref:
-                last_status={"version":"0.5","mode":MODE,"message":"Building boundary reference…","market":market}
+                last_status={"version":"0.7-maker","mode":MODE,"message":"Building boundary reference…","market":market}
                 await asyncio.sleep(POLL); continue
 
             cur_twap,q=feed.twap_at(time.time(),60)
@@ -164,40 +172,54 @@ async def bot_loop():
                 log_signal(now,market,sig,move_bps,ua,da,moms,imb,vel,q.get("disagreement_bps",0))
                 last_logged_second=seconds_left
 
-            pnl=pnl_today(); bankroll=START+pnl; stake=max(1,bankroll*RISK)
+            daily_pnl=pnl_today(); bankroll=START+total_pnl(); stake=max(1,bankroll*RISK)
             blocked=None
             if stopped: blocked="Emergency stop active"
-            elif MODE!="paper": blocked="Live execution disabled in v0.5"
-            elif pnl<=-(START*MAX_DAILY): blocked="Daily loss limit reached"
-            elif already_traded(market["market_id"]): blocked="Already traded this market"
+            elif MODE!="paper": blocked="Live execution disabled in v0.7-maker"
+            elif daily_pnl<=-(START*MAX_DAILY): blocked="Daily loss limit reached"
+            elif already_traded(market["market_id"]) or has_order(market["market_id"]): blocked="Already ordered/traded this market"
             elif ref["capture_method"]!="exact-boundary proxy TWAP":
                 blocked="Boundary reference is not exact enough"
 
-            if sig.action=="BUY" and not blocked:
-                shares=stake/sig.market_price
-                side_spread=us if sig.side=="UP" else ds
-                side_liq=ua_depth if sig.side=="UP" else da_depth
-                market_prob=sig.market_up_probability if sig.side=="UP" else 1-sig.market_up_probability
-                raw_prob=sig.raw_up_probability if sig.side=="UP" else 1-sig.raw_up_probability
-                qual=f"{ref['capture_method']}; coverage={q.get('coverage',0):.0%}; sources={q.get('source_count',0):.1f}"
-                with conn() as c:
-                    c.execute("""INSERT OR IGNORE INTO trades(
-                    ts,market_id,market_slug,side,price,stake,shares,probability,edge,mode,
-                    start_twap,entry_twap,entry_move_bps,entry_seconds_left,entry_spread,
-                    entry_liquidity,entry_feed_quality,raw_model_probability,
-                    market_implied_probability,blended_probability,model_market_gap,
-                    strategy_version,lag_score,book_imbalance,contract_velocity,
-                    spot_mom_5,spot_mom_10,spot_mom_20,spot_acceleration,source_disagreement_bps
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (now,market["market_id"],market["slug"],sig.side,sig.market_price,stake,shares,
-                     sig.probability,sig.edge,MODE,ref["start_twap"],cur_twap,move_bps,
-                     seconds_left,side_spread,side_liq,qual,raw_prob,market_prob,
-                     sig.probability,sig.model_market_gap,"0.5",sig.lag_score,imb,vel,
-                     moms["m5"],moms["m10"],moms["m20"],moms["acceleration"],
-                     q.get("disagreement_bps",0)))
+            # v0.7 maker-only: post at a resting bid; never cross and never fall back to taker.
+            ro=resting_order()
+            if ro and ro["market_slug"]!=market["slug"]:
+                expire_market(ro["market_slug"]); ro=None
+
+            if ro and ro["market_slug"]==market["slug"]:
+                rb=ubid if ro["side"]=="UP" else dbid
+                ra=ua if ro["side"]=="UP" else da
+                update_seen(ro["id"],rb,ra)
+                if seconds_left<MIN_SECS:
+                    cancel_order(ro["id"],"Entry window closed"); ro=None
+                elif evaluate_fill(ro,ra):
+                    side_spread=us if ro["side"]=="UP" else ds
+                    side_liq=ua_depth if ro["side"]=="UP" else da_depth
+                    market_prob=sig.market_up_probability if ro["side"]=="UP" else 1-sig.market_up_probability
+                    raw_prob=sig.raw_up_probability if ro["side"]=="UP" else 1-sig.raw_up_probability
+                    qual=f"{ref['capture_method']}; coverage={q.get('coverage',0):.0%}; sources={q.get('source_count',0):.1f}"
+                    fill_order(ro,now,rb,ra,{"start_twap":ref["start_twap"],"entry_twap":cur_twap,
+                        "move_bps":move_bps,"seconds_left":seconds_left,"spread":side_spread,
+                        "liquidity":side_liq,"feed_quality":qual,"raw_prob":raw_prob,
+                        "market_prob":market_prob,"model_market_gap":sig.model_market_gap,
+                        "lag_score":sig.lag_score,"book_imbalance":imb,"contract_velocity":vel,
+                        "m5":moms["m5"],"m10":moms["m10"],"m20":moms["m20"],
+                        "acceleration":moms["acceleration"],"source_disagreement_bps":q.get("disagreement_bps",0)})
+                    ro=None
+                elif sig.action!="BUY" or sig.side!=ro["side"]:
+                    cancel_order(ro["id"],"Signal invalidated before fill"); ro=None
+
+            if sig.action=="BUY" and not blocked and not ro:
+                side_bid=ubid if sig.side=="UP" else dbid
+                side_ask=ua if sig.side=="UP" else da
+                px=maker_price(side_bid,side_ask)
+                if px is not None:
+                    post_order(now,market,sig.side,px,stake,sig.probability,sig.edge,
+                               side_bid,side_ask,seconds_left)
+                    log("INFO",f"Maker order posted {sig.side} {px:.2f} market={market['slug']}")
 
             last_status={
-                "version":"0.5","mode":MODE,"market":market,"stopped":stopped,
+                "version":"0.7-maker","mode":MODE,"market":market,"stopped":stopped,
                 "feed_warning":"Multi-exchange proxy — NOT exact Chainlink settlement feed",
                 "start_ref_method":ref["capture_method"],"current_quality":q,
                 "seconds_left":seconds_left,"move_bps":move_bps,
@@ -205,11 +227,11 @@ async def bot_loop():
                 "down":{"ask":da,"bid":dbid,"spread":ds,"liq":da_depth},
                 "momentum":moms,"book_imbalance":imb,"contract_velocity":vel,
                 "signal":sig.__dict__,"blocked":blocked,
-                "daily_pnl":pnl,"bankroll":bankroll,"next_stake":stake,
-                "open_trade":open_trade()
+                "daily_pnl":daily_pnl,"bankroll":bankroll,"next_stake":stake,
+                "open_trade":open_trade(),"maker_order":resting_order(),"maker_stats":maker_stats()
             }
         except Exception as e:
-            last_status={"version":"0.5","mode":MODE,
+            last_status={"version":"0.7-maker","mode":MODE,
                          "message":f"Bot loop error: {type(e).__name__}: {e}"}
             log("ERROR",last_status["message"])
         await asyncio.sleep(POLL)
@@ -223,7 +245,7 @@ async def lifespan(app):
     try: await bg_task
     except BaseException: pass
 
-app=FastAPI(title="BTC 5m Bot v0.5",lifespan=lifespan)
+app=FastAPI(title="BTC 5m Bot v0.7 Maker",lifespan=lifespan)
 
 @app.post("/api/stop")
 async def stop():
@@ -249,14 +271,16 @@ async def trades():
 @app.get("/api/stats")
 async def stats():
     with conn() as c:
-        rows=c.execute("SELECT * FROM trades WHERE status='CLOSED' AND strategy_version='0.5'").fetchall()
+        rows=c.execute("SELECT * FROM trades WHERE status='CLOSED' AND strategy_version='0.7-maker'").fetchall()
     n=len(rows); wins=sum(1 for r in rows if float(r["pnl"])>0)
     pnl=sum(float(r["pnl"]) for r in rows)
     avg_edge=sum(float(r["edge"]) for r in rows)/n if n else 0
     avg_lag=sum(float(r["lag_score"] or 0) for r in rows)/n if n else 0
+    ms=maker_stats()
     return {"closed_trades":n,"wins":wins,"losses":n-wins,
             "win_rate":wins/n if n else 0,"total_pnl":pnl,
-            "avg_entry_edge":avg_edge,"avg_lag_score":avg_lag}
+            "avg_entry_edge":avg_edge,"avg_lag_score":avg_lag,
+            "maker":ms}
 
 
 @app.get("/api/public")
@@ -267,7 +291,7 @@ async def public_snapshot():
             "SELECT * FROM trades ORDER BY id DESC LIMIT 10"
         ).fetchall()
         stat_rows=c.execute(
-            "SELECT * FROM trades WHERE status='CLOSED' AND strategy_version='0.5'"
+            "SELECT * FROM trades WHERE status='CLOSED' AND strategy_version='0.7-maker'"
         ).fetchall()
 
     n=len(stat_rows)
@@ -288,7 +312,7 @@ async def public_snapshot():
     }
     snapshot["recent_trades"]=[dict(r) for r in trade_rows]
     snapshot["server_ts"]=int(time.time())
-    snapshot["monitoring_version"]="0.5.4"
+    snapshot["monitoring_version"]="0.7-maker"
     return snapshot
 
 @app.get("/api/healthz")
@@ -300,7 +324,7 @@ async def healthz():
             market_slug=m.get("slug")
     return {
         "ok": True,
-        "version": "0.6",
+        "version": "0.7-maker",
         "mode": MODE,
         "server_ts": int(time.time()),
         "market": market_slug
@@ -317,7 +341,7 @@ def _fresh_monitor_payload():
     market = snapshot.get("market") or {}
 
     return {
-        "version": "0.6",
+        "version": "0.7-maker",
         "mode": MODE,
         "server_ts": int(time.time()),
         "market_slug": market.get("slug"),
@@ -359,6 +383,8 @@ def _fresh_monitor_payload():
         "bankroll": snapshot.get("bankroll"),
         "next_stake": snapshot.get("next_stake"),
         "open_trade": snapshot.get("open_trade"),
+        "maker_order": snapshot.get("maker_order"),
+        "maker_stats": snapshot.get("maker_stats"),
         "shadow_setup": (
             sig.get("action") == "SKIP"
             and (sig.get("lag_score") or 0) >= float(os.getenv("SHADOW_LAG_MIN_SCORE","0.30"))
@@ -378,7 +404,7 @@ async def monitor_txt():
             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
             "Pragma": "no-cache",
             "Expires": "0",
-            "X-Monitor-Version": "0.6",
+            "X-Monitor-Version": "0.7-maker",
         },
     )
 
@@ -393,7 +419,7 @@ async def dashboard():
     market = snapshot.get("market") or {}
 
     monitor = {
-        "version": "0.6",
+        "version": "0.7-maker",
         "mode": MODE,
         "server_ts": int(time.time()),
         "market_slug": market.get("slug"),
@@ -435,6 +461,8 @@ async def dashboard():
         "bankroll": snapshot.get("bankroll"),
         "next_stake": snapshot.get("next_stake"),
         "open_trade": snapshot.get("open_trade"),
+        "maker_order": snapshot.get("maker_order"),
+        "maker_stats": snapshot.get("maker_stats"),
     }
     monitor_json = json.dumps(monitor, separators=(",", ":"), default=str)
     body = HTML.replace("__REMOTE_MONITOR_JSON__", monitor_json)
@@ -449,7 +477,7 @@ async def dashboard():
 
 HTML=r"""<!doctype html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>BTC 5M Bot v0.6</title>
+<title>BTC 5M Bot v0.7 Maker</title>
 <style>
 body{font-family:-apple-system;background:#090c0f;color:#f7f7f8;margin:0;padding:20px}
 .wrap{max-width:680px;margin:auto}.card{background:#171b20;border:1px solid #252b33;border-radius:20px;padding:18px;margin:12px 0}
@@ -459,7 +487,7 @@ h1{font-size:28px}.big{font-size:34px;font-weight:800}.grid{display:grid;grid-te
 button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;width:100%}.stop{background:#ef4444;color:white}.go{background:#22c55e;color:#07140b}
 .trade{font-size:13px;padding:9px 0;border-bottom:1px solid #293039}
 </style></head><body><div class="wrap">
-<h1>BTC 5M Bot <span class="pill">PAPER · v0.6</span></h1>
+<h1>BTC 5M Bot <span class="pill">PAPER · v0.7 MAKER</span></h1>
 <div class="card"><div class="muted">Current market</div><div id="market">Starting…</div><div id="feed" class="warn small"></div><div id="quality" class="muted small"></div></div>
 <div class="card"><div class="muted">Current signal</div><div id="sig" class="big">Starting…</div><div id="why"></div><div id="blocked" class="warn"></div><div id="passes" class="muted small"></div></div>
 <div class="grid"><div class="card"><div class="muted">Time left</div><div id="time" class="big">—</div></div><div class="card"><div class="muted">TWAP move</div><div id="move" class="big">—</div></div></div>
@@ -484,9 +512,10 @@ button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;w
 <div class="row"><span>Next stake</span><b id="stake">—</b></div>
 <div class="row"><span>Bankroll</span><b id="bank">—</b></div>
 </div>
+<div id="makerCard" class="card" style="display:none"><div class="muted">Resting maker order</div><div id="makerSide" class="big"></div><div id="makerDetails"></div></div>
 <div id="openCard" class="card" style="display:none"><div class="muted">Open paper position</div><div id="openSide" class="big"></div><div id="openDetails"></div></div>
 <div class="grid"><button class="stop" onclick="fetch('/api/stop',{method:'POST'})">STOP</button><button class="go" onclick="fetch('/api/resume',{method:'POST'})">RESUME</button></div>
-<div class="card"><b>v0.5 Performance</b><div id="stats" class="muted"></div></div>
+<div class="card"><b>v0.7 Maker Performance</b><div id="stats" class="muted"></div></div>
 <div class="card"><b>Recent trades</b><div id="trades" class="muted"></div></div>
 <div class="card small" id="remote-monitor-card">
 <b>Remote monitor snapshot</b>
@@ -518,12 +547,16 @@ mkt.textContent=pct(x.signal.market_up_probability); blend.textContent=pct(x.sig
 gap.textContent=pct(x.signal.model_market_gap); edge.textContent=pct(x.signal.edge);
 disag.textContent=bp(x.current_quality?.disagreement_bps); stake.textContent=money(x.next_stake); bank.textContent=money(x.bankroll);
 }else sig.textContent=x.message||'Waiting…';
+if(x.maker_order){makerCard.style.display='block';let o=x.maker_order;
+makerSide.textContent=`${o.side} · ${money(o.target_stake)} @ ${Number(o.limit_price).toFixed(3)}`;
+makerDetails.innerHTML=`RESTING MAKER · signal edge ${pct(o.signal_edge)} · ${o.entry_seconds_left}s at post`;
+}else makerCard.style.display='none';
 if(x.open_trade){openCard.style.display='block';let t=x.open_trade;
 openSide.textContent=`${t.side} · ${money(t.stake)} @ ${Number(t.price).toFixed(3)}`;
 openDetails.innerHTML=`Blended <b>${pct(t.blended_probability||t.probability)}</b> · edge <b>${pct(t.edge)}</b> · lag <b>${Number(t.lag_score||0).toFixed(2)}</b><br>${t.entry_seconds_left}s left · move ${Number(t.entry_move_bps||0).toFixed(2)} bp`;
 }else openCard.style.display='none';
 let st=await fetch('/api/stats').then(r=>r.json());
-stats.textContent=st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)}`:'No resolved v0.5 trades yet';
+stats.textContent=(st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)} · `:'No resolved maker trades yet · ')+`maker fills ${st.maker?.filled||0}/${st.maker?.signals_posted||0} (${((st.maker?.fill_rate||0)*100).toFixed(1)}%)`;
 let tr=await fetch('/api/trades').then(r=>r.json());
 trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% blended · ${(Number(t.edge)*100).toFixed(1)}% edge · lag ${Number(t.lag_score||0).toFixed(2)} · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
 }catch(e){sig.textContent='Dashboard reconnecting…'}}
