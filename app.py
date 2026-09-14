@@ -383,6 +383,8 @@ def _fresh_monitor_payload():
         "bankroll": snapshot.get("bankroll"),
         "next_stake": snapshot.get("next_stake"),
         "open_trade": snapshot.get("open_trade"),
+        "maker_order": snapshot.get("maker_order"),
+        "maker_stats": snapshot.get("maker_stats"),
         "shadow_setup": (
             sig.get("action") == "SKIP"
             and (sig.get("lag_score") or 0) >= float(os.getenv("SHADOW_LAG_MIN_SCORE","0.30"))
@@ -459,6 +461,8 @@ async def dashboard():
         "bankroll": snapshot.get("bankroll"),
         "next_stake": snapshot.get("next_stake"),
         "open_trade": snapshot.get("open_trade"),
+        "maker_order": snapshot.get("maker_order"),
+        "maker_stats": snapshot.get("maker_stats"),
     }
     monitor_json = json.dumps(monitor, separators=(",", ":"), default=str)
     body = HTML.replace("__REMOTE_MONITOR_JSON__", monitor_json)
