@@ -49,6 +49,12 @@ def pnl_today():
                        WHERE ts>=? AND strategy_version='0.7-maker'""",(cutoff,)).fetchone()
     return float(r["p"])
 
+def total_pnl():
+    with conn() as c:
+        r=c.execute("""SELECT COALESCE(SUM(pnl),0) p FROM trades
+                       WHERE status='CLOSED' AND strategy_version='0.7-maker'""").fetchone()
+    return float(r["p"])
+
 def already_traded(mid):
     with conn() as c:
         return c.execute("SELECT 1 FROM trades WHERE market_id=? LIMIT 1",(mid,)).fetchone() is not None
@@ -166,11 +172,11 @@ async def bot_loop():
                 log_signal(now,market,sig,move_bps,ua,da,moms,imb,vel,q.get("disagreement_bps",0))
                 last_logged_second=seconds_left
 
-            pnl=pnl_today(); bankroll=START+pnl; stake=max(1,bankroll*RISK)
+            daily_pnl=pnl_today(); bankroll=START+total_pnl(); stake=max(1,bankroll*RISK)
             blocked=None
             if stopped: blocked="Emergency stop active"
             elif MODE!="paper": blocked="Live execution disabled in v0.7-maker"
-            elif pnl<=-(START*MAX_DAILY): blocked="Daily loss limit reached"
+            elif daily_pnl<=-(START*MAX_DAILY): blocked="Daily loss limit reached"
             elif already_traded(market["market_id"]) or has_order(market["market_id"]): blocked="Already ordered/traded this market"
             elif ref["capture_method"]!="exact-boundary proxy TWAP":
                 blocked="Boundary reference is not exact enough"
@@ -200,6 +206,8 @@ async def bot_loop():
                         "m5":moms["m5"],"m10":moms["m10"],"m20":moms["m20"],
                         "acceleration":moms["acceleration"],"source_disagreement_bps":q.get("disagreement_bps",0)})
                     ro=None
+                elif sig.action!="BUY" or sig.side!=ro["side"]:
+                    cancel_order(ro["id"],"Signal invalidated before fill"); ro=None
 
             if sig.action=="BUY" and not blocked and not ro:
                 side_bid=ubid if sig.side=="UP" else dbid
@@ -219,7 +227,7 @@ async def bot_loop():
                 "down":{"ask":da,"bid":dbid,"spread":ds,"liq":da_depth},
                 "momentum":moms,"book_imbalance":imb,"contract_velocity":vel,
                 "signal":sig.__dict__,"blocked":blocked,
-                "daily_pnl":pnl,"bankroll":bankroll,"next_stake":stake,
+                "daily_pnl":daily_pnl,"bankroll":bankroll,"next_stake":stake,
                 "open_trade":open_trade(),"maker_order":resting_order(),"maker_stats":maker_stats()
             }
         except Exception as e:
