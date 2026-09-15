@@ -9,7 +9,8 @@ from price_feed import MultiProxyFeed
 from polymarket import discover_current_btc5m,get_book,book_metrics,store_book_obs,contract_velocity,book_imbalance,resolved_winner
 from strategy import decide
 from maker_execution import resting_order,has_order,maker_price,post_order,cancel_order,expire_market,evaluate_fill,update_seen,fill_order,stats as maker_stats
-from pair_strategy import open_pair,has_pair,enter_pair,exit_pair,settle_pair,total_pnl as pair_total_pnl,stats as pair_stats
+from pair_strategy import open_pair,has_pair,exit_pair,settle_pair,total_pnl as pair_total_pnl,stats as pair_stats
+from pair_maker import active_order as active_pair_order,has_attempt,post_pair,update_order as update_pair_order,cancel_unfilled,create_position,stats as pair_maker_stats
 
 load_dotenv(); init_db()
 
@@ -155,10 +156,11 @@ async def bot_loop():
             seconds_left=market["end_ts"]-now
             move_bps=(cur_twap/ref["start_twap"]-1)*10000
 
-            # v0.8 paired strategy (paper): acquire one UP + one DOWN only when
-            # the immediately executable combined asks are below $1. Once paired,
-            # exit both when combined executable bids reach $1; otherwise settle for $1.
+            # v0.8 paired MAKER strategy. Both legs rest below their asks.
+            # A pair only becomes a position after BOTH conservative paper fills occur.
             pair=open_pair()
+            po=active_pair_order()
+
             if pair and pair["market_slug"]!=market["slug"]:
                 try:
                     winner=await resolved_winner(pair["market_slug"])
@@ -166,20 +168,47 @@ async def bot_loop():
                 except Exception: pass
                 pair=open_pair()
 
+            if po and po["market_slug"]!=market["slug"]:
+                cancel_unfilled(po,"Market changed before both legs filled")
+                po=None
+
             if pair and pair["market_slug"]==market["slug"] and (ubid+dbid)>=1.0:
                 exit_pair(pair,ubid,dbid)
                 log("INFO",f"PAIR EXIT bids={ubid+dbid:.3f} entry={pair['entry_total']:.3f}")
                 pair=None
 
-            pair_entry_total=ua+da
-            if (PAIR_ENABLED and MODE=="paper" and not stopped and not pair
-                and not has_pair(market["market_id"]) and MIN_SECS<=seconds_left<=MAX_SECS
-                and pair_entry_total<1.0 and pair_entry_total<=PAIR_MAX_ENTRY):
+            if po and po["market_slug"]==market["slug"]:
+                state=update_pair_order(po,ua,da)
+                po=active_pair_order()
+                if state=="FILLED":
+                    # reload the now-filled order and create the matched position
+                    with conn() as cdb:
+                        filled=cdb.execute("SELECT * FROM pair_orders WHERE id=?",(po["id"] if po else -1,)).fetchone() if po else None
+                    # active_order excludes FILLED, so fetch by market when needed
+                    if not filled:
+                        with conn() as cdb:
+                            filled=cdb.execute("""SELECT * FROM pair_orders WHERE market_id=? AND status='FILLED'
+                                                  AND strategy_version='0.8-pair-maker'""",
+                                               (market["market_id"],)).fetchone()
+                    if filled:
+                        pair=create_position(dict(filled))
+                        log("INFO",f"PAIR MAKER FILLED total={float(filled['combined_limit']):.3f}")
+                    po=None
+                elif seconds_left<MIN_SECS:
+                    if po: cancel_unfilled(po,"Entry window closed before both legs filled")
+                    po=None
+
+            # Post both maker legs only when their combined locked limit is below $1.
+            if (PAIR_ENABLED and MODE=="paper" and not stopped and not pair and not po
+                and not has_attempt(market["market_id"]) and not has_pair(market["market_id"])
+                and MIN_SECS<=seconds_left<=MAX_SECS):
                 pair_bankroll=START+pair_total_pnl()
                 pair_budget=max(1,pair_bankroll*PAIR_BUDGET_PCT)
-                pair=enter_pair(now,market,ua,da,pair_budget)
-                if pair:
-                    log("INFO",f"PAIR ENTRY asks={pair_entry_total:.3f} shares={pair['shares']:.4f}")
+                po=post_pair(now,market,ubid,ua,dbid,da,pair_budget)
+                if po:
+                    log("INFO",f"PAIR MAKER POST up={po['up_limit']:.2f} down={po['down_limit']:.2f} total={po['combined_limit']:.3f}")
+
+            pair_entry_total=ua+da
 
             sig=decide(
                 start_twap=ref["start_twap"],current_twap=cur_twap,seconds_left=seconds_left,
@@ -260,7 +289,7 @@ async def bot_loop():
                 "daily_pnl":daily_pnl,"bankroll":bankroll,"next_stake":stake,
                 "open_trade":open_trade(),"maker_order":resting_order(),"maker_stats":maker_stats(),
                 "pair":open_pair(),"pair_stats":pair_stats(),"pair_entry_total":pair_entry_total,
-                "pair_exit_total":ubid+dbid
+                "pair_exit_total":ubid+dbid,"pair_order":active_pair_order(),"pair_maker_stats":pair_maker_stats()
             }
         except Exception as e:
             last_status={"version":"0.7-maker","mode":MODE,
@@ -421,6 +450,8 @@ def _fresh_monitor_payload():
         "pair_stats": snapshot.get("pair_stats"),
         "pair_entry_total": snapshot.get("pair_entry_total"),
         "pair_exit_total": snapshot.get("pair_exit_total"),
+        "pair_order": snapshot.get("pair_order"),
+        "pair_maker_stats": snapshot.get("pair_maker_stats"),
         "shadow_setup": (
             sig.get("action") == "SKIP"
             and (sig.get("lag_score") or 0) >= float(os.getenv("SHADOW_LAG_MIN_SCORE","0.30"))
@@ -503,6 +534,8 @@ async def dashboard():
         "pair_stats": snapshot.get("pair_stats"),
         "pair_entry_total": snapshot.get("pair_entry_total"),
         "pair_exit_total": snapshot.get("pair_exit_total"),
+        "pair_order": snapshot.get("pair_order"),
+        "pair_maker_stats": snapshot.get("pair_maker_stats"),
     }
     monitor_json = json.dumps(monitor, separators=(",", ":"), default=str)
     body = HTML.replace("__REMOTE_MONITOR_JSON__", monitor_json)
