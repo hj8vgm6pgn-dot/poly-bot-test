@@ -78,6 +78,48 @@ def init_db():
         c.execute("""CREATE INDEX IF NOT EXISTS idx_maker_order_status
                      ON maker_orders(status)""")
 
+        c.execute("""CREATE TABLE IF NOT EXISTS pair_orders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            market_id TEXT NOT NULL,
+            market_slug TEXT NOT NULL,
+            target_shares REAL NOT NULL,
+            up_limit REAL NOT NULL,
+            down_limit REAL NOT NULL,
+            combined_limit REAL NOT NULL,
+            up_status TEXT NOT NULL DEFAULT 'RESTING',
+            down_status TEXT NOT NULL DEFAULT 'RESTING',
+            up_filled_ts INTEGER,
+            down_filled_ts INTEGER,
+            status TEXT NOT NULL DEFAULT 'RESTING',
+            cancel_reason TEXT,
+            updated_ts INTEGER NOT NULL,
+            strategy_version TEXT NOT NULL DEFAULT '0.8-pair-maker'
+        )""")
+        c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_pair_order_market
+                     ON pair_orders(market_id,strategy_version)""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS pair_positions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts INTEGER NOT NULL,
+            market_id TEXT NOT NULL,
+            market_slug TEXT NOT NULL,
+            shares REAL NOT NULL,
+            up_entry REAL NOT NULL,
+            down_entry REAL NOT NULL,
+            entry_total REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'OPEN',
+            exit_up REAL,
+            exit_down REAL,
+            exit_total REAL,
+            pnl REAL DEFAULT 0,
+            exit_reason TEXT,
+            closed_ts INTEGER,
+            strategy_version TEXT NOT NULL DEFAULT '0.8-pair'
+        )""")
+        c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS idx_pair_market
+                     ON pair_positions(market_id,strategy_version)""")
+
         c.execute("""CREATE TABLE IF NOT EXISTS price_obs(
             ts REAL NOT NULL, price REAL NOT NULL, source TEXT NOT NULL,
             source_count INTEGER DEFAULT 1,
