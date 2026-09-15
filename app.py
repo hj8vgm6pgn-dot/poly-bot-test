@@ -9,6 +9,7 @@ from price_feed import MultiProxyFeed
 from polymarket import discover_current_btc5m,get_book,book_metrics,store_book_obs,contract_velocity,book_imbalance,resolved_winner
 from strategy import decide
 from maker_execution import resting_order,has_order,maker_price,post_order,cancel_order,expire_market,evaluate_fill,update_seen,fill_order,stats as maker_stats
+from pair_strategy import open_pair,has_pair,enter_pair,exit_pair,settle_pair,total_pnl as pair_total_pnl,stats as pair_stats
 
 load_dotenv(); init_db()
 
@@ -36,10 +37,13 @@ EXTREME_P=float(os.getenv("EXTREME_PRICE_THRESHOLD",.12))
 EXTREME_MOVE=float(os.getenv("EXTREME_MIN_MOVE_BPS",6))
 EXTREME_SECS=int(os.getenv("EXTREME_MIN_SECONDS_LEFT",45))
 POLL=float(os.getenv("BOT_POLL_SECONDS",1))
+PAIR_ENABLED=os.getenv("PAIR_STRATEGY_ENABLED","true").lower()=="true"
+PAIR_BUDGET_PCT=float(os.getenv("PAIR_BUDGET_PCT",1))/100
+PAIR_MAX_ENTRY=float(os.getenv("PAIR_MAX_ENTRY_TOTAL",0.999))
 
 feed=MultiProxyFeed()
 market=None; stopped=False; bg_task=None
-last_status={"message":"Starting v0.7 maker-only…"}
+last_status={"message":"Starting v0.8 paired strategy…"}
 last_logged_second=None
 
 def pnl_today():
@@ -114,7 +118,7 @@ def log_signal(now,m,sig,move_bps,ua,da,moms,imb,vel,disag):
 
 async def bot_loop():
     global market,last_status,last_logged_second
-    log("INFO","v0.7 maker-only started")
+    log("INFO","v0.8 paired strategy started")
     while True:
         try:
             await feed.update()
@@ -150,6 +154,32 @@ async def bot_loop():
             moms=feed.momentum_pack()
             seconds_left=market["end_ts"]-now
             move_bps=(cur_twap/ref["start_twap"]-1)*10000
+
+            # v0.8 paired strategy (paper): acquire one UP + one DOWN only when
+            # the immediately executable combined asks are below $1. Once paired,
+            # exit both when combined executable bids reach $1; otherwise settle for $1.
+            pair=open_pair()
+            if pair and pair["market_slug"]!=market["slug"]:
+                try:
+                    winner=await resolved_winner(pair["market_slug"])
+                    if winner: settle_pair(pair)
+                except Exception: pass
+                pair=open_pair()
+
+            if pair and pair["market_slug"]==market["slug"] and (ubid+dbid)>=1.0:
+                exit_pair(pair,ubid,dbid)
+                log("INFO",f"PAIR EXIT bids={ubid+dbid:.3f} entry={pair['entry_total']:.3f}")
+                pair=None
+
+            pair_entry_total=ua+da
+            if (PAIR_ENABLED and MODE=="paper" and not stopped and not pair
+                and not has_pair(market["market_id"]) and MIN_SECS<=seconds_left<=MAX_SECS
+                and pair_entry_total<1.0 and pair_entry_total<=PAIR_MAX_ENTRY):
+                pair_bankroll=START+pair_total_pnl()
+                pair_budget=max(1,pair_bankroll*PAIR_BUDGET_PCT)
+                pair=enter_pair(now,market,ua,da,pair_budget)
+                if pair:
+                    log("INFO",f"PAIR ENTRY asks={pair_entry_total:.3f} shares={pair['shares']:.4f}")
 
             sig=decide(
                 start_twap=ref["start_twap"],current_twap=cur_twap,seconds_left=seconds_left,
@@ -219,7 +249,7 @@ async def bot_loop():
                     log("INFO",f"Maker order posted {sig.side} {px:.2f} market={market['slug']}")
 
             last_status={
-                "version":"0.7-maker","mode":MODE,"market":market,"stopped":stopped,
+                "version":"0.8-pair","mode":MODE,"market":market,"stopped":stopped,
                 "feed_warning":"Multi-exchange proxy — NOT exact Chainlink settlement feed",
                 "start_ref_method":ref["capture_method"],"current_quality":q,
                 "seconds_left":seconds_left,"move_bps":move_bps,
@@ -228,7 +258,9 @@ async def bot_loop():
                 "momentum":moms,"book_imbalance":imb,"contract_velocity":vel,
                 "signal":sig.__dict__,"blocked":blocked,
                 "daily_pnl":daily_pnl,"bankroll":bankroll,"next_stake":stake,
-                "open_trade":open_trade(),"maker_order":resting_order(),"maker_stats":maker_stats()
+                "open_trade":open_trade(),"maker_order":resting_order(),"maker_stats":maker_stats(),
+                "pair":open_pair(),"pair_stats":pair_stats(),"pair_entry_total":pair_entry_total,
+                "pair_exit_total":ubid+dbid
             }
         except Exception as e:
             last_status={"version":"0.7-maker","mode":MODE,
@@ -245,7 +277,7 @@ async def lifespan(app):
     try: await bg_task
     except BaseException: pass
 
-app=FastAPI(title="BTC 5m Bot v0.7 Maker",lifespan=lifespan)
+app=FastAPI(title="BTC 5m Bot v0.8 Pair + v0.7 Maker",lifespan=lifespan)
 
 @app.post("/api/stop")
 async def stop():
@@ -477,7 +509,7 @@ async def dashboard():
 
 HTML=r"""<!doctype html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>BTC 5M Bot v0.7 Maker</title>
+<title>BTC 5M Bot v0.8 Pair</title>
 <style>
 body{font-family:-apple-system;background:#090c0f;color:#f7f7f8;margin:0;padding:20px}
 .wrap{max-width:680px;margin:auto}.card{background:#171b20;border:1px solid #252b33;border-radius:20px;padding:18px;margin:12px 0}
@@ -487,7 +519,7 @@ h1{font-size:28px}.big{font-size:34px;font-weight:800}.grid{display:grid;grid-te
 button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;width:100%}.stop{background:#ef4444;color:white}.go{background:#22c55e;color:#07140b}
 .trade{font-size:13px;padding:9px 0;border-bottom:1px solid #293039}
 </style></head><body><div class="wrap">
-<h1>BTC 5M Bot <span class="pill">PAPER · v0.7 MAKER</span></h1>
+<h1>BTC 5M Bot <span class="pill">PAPER · v0.8 PAIR + v0.7 MAKER</span></h1>
 <div class="card"><div class="muted">Current market</div><div id="market">Starting…</div><div id="feed" class="warn small"></div><div id="quality" class="muted small"></div></div>
 <div class="card"><div class="muted">Current signal</div><div id="sig" class="big">Starting…</div><div id="why"></div><div id="blocked" class="warn"></div><div id="passes" class="muted small"></div></div>
 <div class="grid"><div class="card"><div class="muted">Time left</div><div id="time" class="big">—</div></div><div class="card"><div class="muted">TWAP move</div><div id="move" class="big">—</div></div></div>
@@ -512,6 +544,7 @@ button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;w
 <div class="row"><span>Next stake</span><b id="stake">—</b></div>
 <div class="row"><span>Bankroll</span><b id="bank">—</b></div>
 </div>
+<div class="card"><b>v0.8 Pair Strategy</b><div class="row"><span>Buy pair now (asks)</span><b id="pairEntry">—</b></div><div class="row"><span>Sell pair now (bids)</span><b id="pairExit">—</b></div><div id="pairStatus" class="muted"></div></div>
 <div id="makerCard" class="card" style="display:none"><div class="muted">Resting maker order</div><div id="makerSide" class="big"></div><div id="makerDetails"></div></div>
 <div id="openCard" class="card" style="display:none"><div class="muted">Open paper position</div><div id="openSide" class="big"></div><div id="openDetails"></div></div>
 <div class="grid"><button class="stop" onclick="fetch('/api/stop',{method:'POST'})">STOP</button><button class="go" onclick="fetch('/api/resume',{method:'POST'})">RESUME</button></div>
@@ -547,6 +580,54 @@ mkt.textContent=pct(x.signal.market_up_probability); blend.textContent=pct(x.sig
 gap.textContent=pct(x.signal.model_market_gap); edge.textContent=pct(x.signal.edge);
 disag.textContent=bp(x.current_quality?.disagreement_bps); stake.textContent=money(x.next_stake); bank.textContent=money(x.bankroll);
 }else sig.textContent=x.message||'Waiting…';
+pairEntry.textContent=''block';let o=x.maker_order;
+makerSide.textContent=`${o.side} · ${money(o.target_stake)} @ ${Number(o.limit_price).toFixed(3)}`;
+makerDetails.innerHTML=`RESTING MAKER · signal edge ${pct(o.signal_edge)} · ${o.entry_seconds_left}s at post`;
+}else makerCard.style.display='none';
+if(x.open_trade){openCard.style.display='block';let t=x.open_trade;
+openSide.textContent=`${t.side} · ${money(t.stake)} @ ${Number(t.price).toFixed(3)}`;
+openDetails.innerHTML=`Blended <b>${pct(t.blended_probability||t.probability)}</b> · edge <b>${pct(t.edge)}</b> · lag <b>${Number(t.lag_score||0).toFixed(2)}</b><br>${t.entry_seconds_left}s left · move ${Number(t.entry_move_bps||0).toFixed(2)} bp`;
+}else openCard.style.display='none';
+let st=await fetch('/api/stats').then(r=>r.json());
+stats.textContent=(st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)} · `:'No resolved maker trades yet · ')+`maker fills ${st.maker?.filled||0}/${st.maker?.signals_posted||0} (${((st.maker?.fill_rate||0)*100).toFixed(1)}%)`;
+let tr=await fetch('/api/trades').then(r=>r.json());
+trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% blended · ${(Number(t.edge)*100).toFixed(1)}% edge · lag ${Number(t.lag_score||0).toFixed(2)} · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
+}catch(e){sig.textContent='Dashboard reconnecting…'}}
+setInterval(tick,1500);tick();
+</script></body></html>"""
++Number((x.up?.ask||0)+(x.down?.ask||0)).toFixed(3);
+pairExit.textContent=''block';let o=x.maker_order;
+makerSide.textContent=`${o.side} · ${money(o.target_stake)} @ ${Number(o.limit_price).toFixed(3)}`;
+makerDetails.innerHTML=`RESTING MAKER · signal edge ${pct(o.signal_edge)} · ${o.entry_seconds_left}s at post`;
+}else makerCard.style.display='none';
+if(x.open_trade){openCard.style.display='block';let t=x.open_trade;
+openSide.textContent=`${t.side} · ${money(t.stake)} @ ${Number(t.price).toFixed(3)}`;
+openDetails.innerHTML=`Blended <b>${pct(t.blended_probability||t.probability)}</b> · edge <b>${pct(t.edge)}</b> · lag <b>${Number(t.lag_score||0).toFixed(2)}</b><br>${t.entry_seconds_left}s left · move ${Number(t.entry_move_bps||0).toFixed(2)} bp`;
+}else openCard.style.display='none';
+let st=await fetch('/api/stats').then(r=>r.json());
+stats.textContent=(st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)} · `:'No resolved maker trades yet · ')+`maker fills ${st.maker?.filled||0}/${st.maker?.signals_posted||0} (${((st.maker?.fill_rate||0)*100).toFixed(1)}%)`;
+let tr=await fetch('/api/trades').then(r=>r.json());
+trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% blended · ${(Number(t.edge)*100).toFixed(1)}% edge · lag ${Number(t.lag_score||0).toFixed(2)} · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
+}catch(e){sig.textContent='Dashboard reconnecting…'}}
+setInterval(tick,1500);tick();
+</script></body></html>"""
++Number((x.up?.bid||0)+(x.down?.bid||0)).toFixed(3);
+pairStatus.textContent=x.pair?('PAIR OPEN · entry 'block';let o=x.maker_order;
+makerSide.textContent=`${o.side} · ${money(o.target_stake)} @ ${Number(o.limit_price).toFixed(3)}`;
+makerDetails.innerHTML=`RESTING MAKER · signal edge ${pct(o.signal_edge)} · ${o.entry_seconds_left}s at post`;
+}else makerCard.style.display='none';
+if(x.open_trade){openCard.style.display='block';let t=x.open_trade;
+openSide.textContent=`${t.side} · ${money(t.stake)} @ ${Number(t.price).toFixed(3)}`;
+openDetails.innerHTML=`Blended <b>${pct(t.blended_probability||t.probability)}</b> · edge <b>${pct(t.edge)}</b> · lag <b>${Number(t.lag_score||0).toFixed(2)}</b><br>${t.entry_seconds_left}s left · move ${Number(t.entry_move_bps||0).toFixed(2)} bp`;
+}else openCard.style.display='none';
+let st=await fetch('/api/stats').then(r=>r.json());
+stats.textContent=(st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)} · `:'No resolved maker trades yet · ')+`maker fills ${st.maker?.filled||0}/${st.maker?.signals_posted||0} (${((st.maker?.fill_rate||0)*100).toFixed(1)}%)`;
+let tr=await fetch('/api/trades').then(r=>r.json());
+trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% blended · ${(Number(t.edge)*100).toFixed(1)}% edge · lag ${Number(t.lag_score||0).toFixed(2)} · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
+}catch(e){sig.textContent='Dashboard reconnecting…'}}
+setInterval(tick,1500);tick();
+</script></body></html>"""
++Number(x.pair.entry_total).toFixed(3)+' · '+Number(x.pair.shares).toFixed(3)+' shares'):('No pair open · entries '+(x.pair_stats?.entries||0)+' · P&L '+money(x.pair_stats?.pnl||0));
 if(x.maker_order){makerCard.style.display='block';let o=x.maker_order;
 makerSide.textContent=`${o.side} · ${money(o.target_stake)} @ ${Number(o.limit_price).toFixed(3)}`;
 makerDetails.innerHTML=`RESTING MAKER · signal edge ${pct(o.signal_edge)} · ${o.entry_seconds_left}s at post`;
