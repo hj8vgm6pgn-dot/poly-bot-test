@@ -132,12 +132,12 @@ async def bot_loop():
                 log("INFO",f"Market detected {m['slug']}")
 
             if not market:
-                last_status={"version":"0.7-maker","mode":MODE,"message":"Searching for current BTC 5m market…"}
+                last_status={"version":"0.8-pair","mode":MODE,"message":"Searching for current BTC 5m market…"}
                 await asyncio.sleep(POLL); continue
 
             ref=get_or_create_ref(market)
             if not ref:
-                last_status={"version":"0.7-maker","mode":MODE,"message":"Building boundary reference…","market":market}
+                last_status={"version":"0.8-pair","mode":MODE,"message":"Building boundary reference…","market":market}
                 await asyncio.sleep(POLL); continue
 
             cur_twap,q=feed.twap_at(time.time(),60)
@@ -178,12 +178,13 @@ async def bot_loop():
                 pair=None
 
             if po and po["market_slug"]==market["slug"]:
+                po_id=po["id"]
                 state=update_pair_order(po,ua,da)
                 po=active_pair_order()
                 if state=="FILLED":
                     # reload the now-filled order and create the matched position
                     with conn() as cdb:
-                        filled=cdb.execute("SELECT * FROM pair_orders WHERE id=?",(po["id"] if po else -1,)).fetchone() if po else None
+                        filled=cdb.execute("SELECT * FROM pair_orders WHERE id=?",(po_id,)).fetchone()
                     # active_order excludes FILLED, so fetch by market when needed
                     if not filled:
                         with conn() as cdb:
