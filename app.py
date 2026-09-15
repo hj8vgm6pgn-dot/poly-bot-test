@@ -551,137 +551,52 @@ async def dashboard():
 
 HTML=r"""<!doctype html><html><head>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>BTC 5M Bot v0.8 Pair</title>
+<title>BTC 5M Bot v0.8 Pair Maker</title>
 <style>
 body{font-family:-apple-system;background:#090c0f;color:#f7f7f8;margin:0;padding:20px}
 .wrap{max-width:680px;margin:auto}.card{background:#171b20;border:1px solid #252b33;border-radius:20px;padding:18px;margin:12px 0}
-h1{font-size:28px}.big{font-size:34px;font-weight:800}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+h1{font-size:28px}.big{font-size:30px;font-weight:800}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .muted{color:#9ca3af}.warn{color:#fbbf24}.pill{display:inline-block;border-radius:999px;background:#272d35;padding:5px 9px;font-size:12px}
 .row{display:flex;justify-content:space-between;gap:12px;margin:7px 0}.small{font-size:13px}
 button{border:0;border-radius:16px;padding:15px;font-weight:800;font-size:16px;width:100%}.stop{background:#ef4444;color:white}.go{background:#22c55e;color:#07140b}
 .trade{font-size:13px;padding:9px 0;border-bottom:1px solid #293039}
 </style></head><body><div class="wrap">
-<h1>BTC 5M Bot <span class="pill">PAPER · v0.8 PAIR + v0.7 MAKER</span></h1>
-<div class="card"><div class="muted">Current market</div><div id="market">Starting…</div><div id="feed" class="warn small"></div><div id="quality" class="muted small"></div></div>
-<div class="card"><div class="muted">Current signal</div><div id="sig" class="big">Starting…</div><div id="why"></div><div id="blocked" class="warn"></div><div id="passes" class="muted small"></div></div>
+<h1>BTC 5M Bot <span class="pill">PAPER · v0.8 PAIR MAKER</span></h1>
+<div class="card"><div class="muted">Current market</div><div id="market">Starting…</div><div id="feed" class="warn small"></div></div>
 <div class="grid"><div class="card"><div class="muted">Time left</div><div id="time" class="big">—</div></div><div class="card"><div class="muted">TWAP move</div><div id="move" class="big">—</div></div></div>
-<div class="grid"><div class="card"><div class="muted">UP ask</div><div id="up" class="big">—</div></div><div class="card"><div class="muted">DOWN ask</div><div id="down" class="big">—</div></div></div>
-<div class="card">
-<div class="row"><span>5s momentum</span><b id="m5">—</b></div>
-<div class="row"><span>10s momentum</span><b id="m10">—</b></div>
-<div class="row"><span>20s momentum</span><b id="m20">—</b></div>
-<div class="row"><span>Acceleration</span><b id="acc">—</b></div>
-<div class="row"><span>Book imbalance</span><b id="imb">—</b></div>
-<div class="row"><span>Contract velocity</span><b id="vel">—</b></div>
-<div class="row"><span>Lag score</span><b id="lag">—</b></div>
-<div class="row"><span>Lag direction</span><b id="lagdir">—</b></div>
-</div>
-<div class="card">
-<div class="row"><span>Raw model UP</span><b id="raw">—</b></div>
-<div class="row"><span>Market implied UP</span><b id="mkt">—</b></div>
-<div class="row"><span>Blended UP</span><b id="blend">—</b></div>
-<div class="row"><span>Model/market gap</span><b id="gap">—</b></div>
-<div class="row"><span>Current edge</span><b id="edge">—</b></div>
-<div class="row"><span>Source disagreement</span><b id="disag">—</b></div>
-<div class="row"><span>Next stake</span><b id="stake">—</b></div>
-<div class="row"><span>Bankroll</span><b id="bank">—</b></div>
-</div>
-<div class="card"><b>v0.8 Pair Strategy</b><div class="row"><span>Buy pair now (asks)</span><b id="pairEntry">—</b></div><div class="row"><span>Sell pair now (bids)</span><b id="pairExit">—</b></div><div id="pairStatus" class="muted"></div></div>
-<div id="makerCard" class="card" style="display:none"><div class="muted">Resting maker order</div><div id="makerSide" class="big"></div><div id="makerDetails"></div></div>
-<div id="openCard" class="card" style="display:none"><div class="muted">Open paper position</div><div id="openSide" class="big"></div><div id="openDetails"></div></div>
+<div class="grid"><div class="card"><div class="muted">UP ask / bid</div><div id="up" class="big">—</div></div><div class="card"><div class="muted">DOWN ask / bid</div><div id="down" class="big">—</div></div></div>
+<div class="card"><b>v0.8 Pair Maker</b>
+<div class="row"><span>Executable buy total (asks)</span><b id="pairEntry">—</b></div>
+<div class="row"><span>Executable sell total (bids)</span><b id="pairExit">—</b></div>
+<div id="pairOrder" class="warn"></div><div id="pairStatus" class="muted"></div></div>
+<div class="card"><div class="muted">Directional v0.7 signal</div><div id="sig" class="big">—</div><div id="why"></div><div id="blocked" class="warn"></div></div>
+<div id="makerCard" class="card" style="display:none"><div class="muted">v0.7 resting maker</div><div id="makerSide" class="big"></div></div>
+<div id="openCard" class="card" style="display:none"><div class="muted">v0.7 open position</div><div id="openSide" class="big"></div></div>
 <div class="grid"><button class="stop" onclick="fetch('/api/stop',{method:'POST'})">STOP</button><button class="go" onclick="fetch('/api/resume',{method:'POST'})">RESUME</button></div>
 <div class="card"><b>v0.7 Maker Performance</b><div id="stats" class="muted"></div></div>
-<div class="card"><b>Recent trades</b><div id="trades" class="muted"></div></div>
-<div class="card small" id="remote-monitor-card">
-<b>Remote monitor snapshot</b>
-<div style="margin:8px 0"><a href="/monitor.txt" rel="nofollow">Fresh monitor.txt</a></div>
-<pre style="white-space:pre-wrap;word-break:break-word;color:#9ca3af">__REMOTE_MONITOR_JSON__</pre>
-</div>
-</div>
-<script>
+<div class="card"><b>Recent directional trades</b><div id="trades" class="muted"></div></div>
+<div class="card small"><b>Remote monitor snapshot</b><div style="margin:8px 0"><a href="/monitor.txt">Fresh monitor.txt</a></div><pre style="white-space:pre-wrap;word-break:break-word;color:#9ca3af">__REMOTE_MONITOR_JSON__</pre></div>
+</div><script>
 function money(x){return '$'+Number(x||0).toFixed(2)}
 function pct(x){return (Number(x||0)*100).toFixed(1)+'%'}
-function bp(x){return Number(x||0).toFixed(2)+' bp'}
 async function tick(){try{
 let x=await fetch('/api/status').then(r=>r.json());
-market.textContent=x.market?.slug||x.message||'Searching…';
-feed.textContent=x.feed_warning||'';
-quality.textContent=x.start_ref_method?`Start ref: ${x.start_ref_method} · coverage ${Math.round((x.current_quality?.coverage||0)*100)}% · sources ${(x.current_quality?.source_count||0).toFixed(1)}`:'';
-if(x.signal){
-sig.textContent=x.signal.action+(x.signal.side?' '+x.signal.side:'');
-why.textContent=x.signal.reason||'';
-blocked.textContent=x.blocked?('BLOCKED: '+x.blocked):'';
-passes.textContent=`Filters passed: ${x.signal.filters_passed}/${x.signal.filters_total}`;
-time.textContent=(x.seconds_left??0)+'s'; move.textContent=bp(x.move_bps);
-up.textContent=(x.up?.ask??0).toFixed(3); down.textContent=(x.down?.ask??0).toFixed(3);
-m5.textContent=bp(x.momentum?.m5); m10.textContent=bp(x.momentum?.m10); m20.textContent=bp(x.momentum?.m20);
-acc.textContent=bp(x.momentum?.acceleration); imb.textContent=Number(x.book_imbalance||0).toFixed(2);
-vel.textContent=Number(x.contract_velocity||0).toFixed(3); lag.textContent=Number(x.signal.lag_score||0).toFixed(2);
-lagdir.textContent=x.signal.lag_direction||'—'; raw.textContent=pct(x.signal.raw_up_probability);
-mkt.textContent=pct(x.signal.market_up_probability); blend.textContent=pct(x.signal.blended_up_probability);
-gap.textContent=pct(x.signal.model_market_gap); edge.textContent=pct(x.signal.edge);
-disag.textContent=bp(x.current_quality?.disagreement_bps); stake.textContent=money(x.next_stake); bank.textContent=money(x.bankroll);
-}else sig.textContent=x.message||'Waiting…';
-pairEntry.textContent=''block';let o=x.maker_order;
-makerSide.textContent=`${o.side} · ${money(o.target_stake)} @ ${Number(o.limit_price).toFixed(3)}`;
-makerDetails.innerHTML=`RESTING MAKER · signal edge ${pct(o.signal_edge)} · ${o.entry_seconds_left}s at post`;
-}else makerCard.style.display='none';
-if(x.open_trade){openCard.style.display='block';let t=x.open_trade;
-openSide.textContent=`${t.side} · ${money(t.stake)} @ ${Number(t.price).toFixed(3)}`;
-openDetails.innerHTML=`Blended <b>${pct(t.blended_probability||t.probability)}</b> · edge <b>${pct(t.edge)}</b> · lag <b>${Number(t.lag_score||0).toFixed(2)}</b><br>${t.entry_seconds_left}s left · move ${Number(t.entry_move_bps||0).toFixed(2)} bp`;
-}else openCard.style.display='none';
+market.textContent=x.market?.slug||x.message||'Searching…'; feed.textContent=x.feed_warning||'';
+time.textContent=(x.seconds_left??0)+'s'; move.textContent=Number(x.move_bps||0).toFixed(2)+' bp';
+up.textContent=Number(x.up?.ask||0).toFixed(3)+' / '+Number(x.up?.bid||0).toFixed(3);
+down.textContent=Number(x.down?.ask||0).toFixed(3)+' / '+Number(x.down?.bid||0).toFixed(3);
+pairEntry.textContent='$'+Number((x.up?.ask||0)+(x.down?.ask||0)).toFixed(3);
+pairExit.textContent='$'+Number((x.up?.bid||0)+(x.down?.bid||0)).toFixed(3);
+let po=x.pair_order, ps=x.pair_maker_stats||{};
+pairOrder.textContent=po?('PAIR ORDER '+po.status+' · UP '+po.up_status+' @ '+Number(po.up_limit).toFixed(2)+' · DOWN '+po.down_status+' @ '+Number(po.down_limit).toFixed(2)+' · total '+Number(po.combined_limit).toFixed(3)):'';
+pairStatus.textContent=x.pair?('PAIR OPEN · entry $'+Number(x.pair.entry_total).toFixed(3)+' · '+Number(x.pair.shares).toFixed(3)+' shares'):('Attempts '+(ps.attempts||0)+' · paired '+(ps.paired||0)+' · stranded '+(ps.stranded||0)+' · pair fill '+((ps.pair_fill_rate||0)*100).toFixed(1)+'% · P&L '+money(x.pair_stats?.pnl||0));
+if(x.signal){sig.textContent=x.signal.action+(x.signal.side?' '+x.signal.side:'');why.textContent=x.signal.reason||'';blocked.textContent=x.blocked?('BLOCKED: '+x.blocked):'';}
+if(x.maker_order){makerCard.style.display='block';makerSide.textContent=x.maker_order.side+' · '+money(x.maker_order.target_stake)+' @ '+Number(x.maker_order.limit_price).toFixed(3)}else makerCard.style.display='none';
+if(x.open_trade){openCard.style.display='block';openSide.textContent=x.open_trade.side+' · '+money(x.open_trade.stake)+' @ '+Number(x.open_trade.price).toFixed(3)}else openCard.style.display='none';
 let st=await fetch('/api/stats').then(r=>r.json());
-stats.textContent=(st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)} · `:'No resolved maker trades yet · ')+`maker fills ${st.maker?.filled||0}/${st.maker?.signals_posted||0} (${((st.maker?.fill_rate||0)*100).toFixed(1)}%)`;
+stats.textContent=(st.closed_trades?st.wins+'-'+st.losses+' · '+(st.win_rate*100).toFixed(1)+'% · P&L '+money(st.total_pnl):'No resolved v0.7 trades yet')+' · maker fills '+(st.maker?.filled||0)+'/'+(st.maker?.signals_posted||0);
 let tr=await fetch('/api/trades').then(r=>r.json());
-trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% blended · ${(Number(t.edge)*100).toFixed(1)}% edge · lag ${Number(t.lag_score||0).toFixed(2)} · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
-}catch(e){sig.textContent='Dashboard reconnecting…'}}
-setInterval(tick,1500);tick();
-</script></body></html>"""
-+Number((x.up?.ask||0)+(x.down?.ask||0)).toFixed(3);
-pairExit.textContent=''block';let o=x.maker_order;
-makerSide.textContent=`${o.side} · ${money(o.target_stake)} @ ${Number(o.limit_price).toFixed(3)}`;
-makerDetails.innerHTML=`RESTING MAKER · signal edge ${pct(o.signal_edge)} · ${o.entry_seconds_left}s at post`;
-}else makerCard.style.display='none';
-if(x.open_trade){openCard.style.display='block';let t=x.open_trade;
-openSide.textContent=`${t.side} · ${money(t.stake)} @ ${Number(t.price).toFixed(3)}`;
-openDetails.innerHTML=`Blended <b>${pct(t.blended_probability||t.probability)}</b> · edge <b>${pct(t.edge)}</b> · lag <b>${Number(t.lag_score||0).toFixed(2)}</b><br>${t.entry_seconds_left}s left · move ${Number(t.entry_move_bps||0).toFixed(2)} bp`;
-}else openCard.style.display='none';
-let st=await fetch('/api/stats').then(r=>r.json());
-stats.textContent=(st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)} · `:'No resolved maker trades yet · ')+`maker fills ${st.maker?.filled||0}/${st.maker?.signals_posted||0} (${((st.maker?.fill_rate||0)*100).toFixed(1)}%)`;
-let tr=await fetch('/api/trades').then(r=>r.json());
-trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% blended · ${(Number(t.edge)*100).toFixed(1)}% edge · lag ${Number(t.lag_score||0).toFixed(2)} · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
-}catch(e){sig.textContent='Dashboard reconnecting…'}}
-setInterval(tick,1500);tick();
-</script></body></html>"""
-+Number((x.up?.bid||0)+(x.down?.bid||0)).toFixed(3);
-pairStatus.textContent=x.pair?('PAIR OPEN · entry 'block';let o=x.maker_order;
-makerSide.textContent=`${o.side} · ${money(o.target_stake)} @ ${Number(o.limit_price).toFixed(3)}`;
-makerDetails.innerHTML=`RESTING MAKER · signal edge ${pct(o.signal_edge)} · ${o.entry_seconds_left}s at post`;
-}else makerCard.style.display='none';
-if(x.open_trade){openCard.style.display='block';let t=x.open_trade;
-openSide.textContent=`${t.side} · ${money(t.stake)} @ ${Number(t.price).toFixed(3)}`;
-openDetails.innerHTML=`Blended <b>${pct(t.blended_probability||t.probability)}</b> · edge <b>${pct(t.edge)}</b> · lag <b>${Number(t.lag_score||0).toFixed(2)}</b><br>${t.entry_seconds_left}s left · move ${Number(t.entry_move_bps||0).toFixed(2)} bp`;
-}else openCard.style.display='none';
-let st=await fetch('/api/stats').then(r=>r.json());
-stats.textContent=(st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)} · `:'No resolved maker trades yet · ')+`maker fills ${st.maker?.filled||0}/${st.maker?.signals_posted||0} (${((st.maker?.fill_rate||0)*100).toFixed(1)}%)`;
-let tr=await fetch('/api/trades').then(r=>r.json());
-trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% blended · ${(Number(t.edge)*100).toFixed(1)}% edge · lag ${Number(t.lag_score||0).toFixed(2)} · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
-}catch(e){sig.textContent='Dashboard reconnecting…'}}
-setInterval(tick,1500);tick();
-</script></body></html>"""
-+Number(x.pair.entry_total).toFixed(3)+' · '+Number(x.pair.shares).toFixed(3)+' shares'):('No pair open · entries '+(x.pair_stats?.entries||0)+' · P&L '+money(x.pair_stats?.pnl||0));
-if(x.maker_order){makerCard.style.display='block';let o=x.maker_order;
-makerSide.textContent=`${o.side} · ${money(o.target_stake)} @ ${Number(o.limit_price).toFixed(3)}`;
-makerDetails.innerHTML=`RESTING MAKER · signal edge ${pct(o.signal_edge)} · ${o.entry_seconds_left}s at post`;
-}else makerCard.style.display='none';
-if(x.open_trade){openCard.style.display='block';let t=x.open_trade;
-openSide.textContent=`${t.side} · ${money(t.stake)} @ ${Number(t.price).toFixed(3)}`;
-openDetails.innerHTML=`Blended <b>${pct(t.blended_probability||t.probability)}</b> · edge <b>${pct(t.edge)}</b> · lag <b>${Number(t.lag_score||0).toFixed(2)}</b><br>${t.entry_seconds_left}s left · move ${Number(t.entry_move_bps||0).toFixed(2)} bp`;
-}else openCard.style.display='none';
-let st=await fetch('/api/stats').then(r=>r.json());
-stats.textContent=(st.closed_trades?`${st.wins}-${st.losses} · ${(st.win_rate*100).toFixed(1)}% win rate · P&L ${money(st.total_pnl)} · avg edge ${(st.avg_entry_edge*100).toFixed(1)}% · avg lag ${Number(st.avg_lag_score||0).toFixed(2)} · `:'No resolved maker trades yet · ')+`maker fills ${st.maker?.filled||0}/${st.maker?.signals_posted||0} (${((st.maker?.fill_rate||0)*100).toFixed(1)}%)`;
-let tr=await fetch('/api/trades').then(r=>r.json());
-trades.innerHTML=tr.slice(0,8).map(t=>`<div class="trade"><b>${t.side}</b> ${money(t.stake)} @ ${Number(t.price).toFixed(3)} · ${(Number(t.probability)*100).toFixed(1)}% blended · ${(Number(t.edge)*100).toFixed(1)}% edge · lag ${Number(t.lag_score||0).toFixed(2)} · ${t.status}${t.status==='CLOSED'?' · '+money(t.pnl):''}</div>`).join('')||'No trades yet';
+trades.innerHTML=tr.slice(0,8).map(t=>'<div class="trade"><b>'+t.side+'</b> '+money(t.stake)+' @ '+Number(t.price).toFixed(3)+' · '+t.status+(t.status==='CLOSED'?' · '+money(t.pnl):'')+'</div>').join('')||'No trades yet';
 }catch(e){sig.textContent='Dashboard reconnecting…'}}
 setInterval(tick,1500);tick();
 </script></body></html>"""
