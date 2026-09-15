@@ -417,6 +417,10 @@ def _fresh_monitor_payload():
         "open_trade": snapshot.get("open_trade"),
         "maker_order": snapshot.get("maker_order"),
         "maker_stats": snapshot.get("maker_stats"),
+        "pair": snapshot.get("pair"),
+        "pair_stats": snapshot.get("pair_stats"),
+        "pair_entry_total": snapshot.get("pair_entry_total"),
+        "pair_exit_total": snapshot.get("pair_exit_total"),
         "shadow_setup": (
             sig.get("action") == "SKIP"
             and (sig.get("lag_score") or 0) >= float(os.getenv("SHADOW_LAG_MIN_SCORE","0.30"))
@@ -495,6 +499,10 @@ async def dashboard():
         "open_trade": snapshot.get("open_trade"),
         "maker_order": snapshot.get("maker_order"),
         "maker_stats": snapshot.get("maker_stats"),
+        "pair": snapshot.get("pair"),
+        "pair_stats": snapshot.get("pair_stats"),
+        "pair_entry_total": snapshot.get("pair_entry_total"),
+        "pair_exit_total": snapshot.get("pair_exit_total"),
     }
     monitor_json = json.dumps(monitor, separators=(",", ":"), default=str)
     body = HTML.replace("__REMOTE_MONITOR_JSON__", monitor_json)
