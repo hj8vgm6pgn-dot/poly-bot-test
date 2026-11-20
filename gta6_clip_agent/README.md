@@ -132,9 +132,10 @@ moments where the creator is talking over stretches of raw trailer.
 
 ## Covers
 
-Every rendered clip also gets a cover image in `out/covers/`, in the channel's neon style:
-a darkened frame from the clip, a glowing frame, a large "GTA 6" tag (or "TOP 3" on a
-compilation) and the clip's headline. Pick it as the cover when you post on TikTok and
+Every rendered clip also gets a cover image in `out/covers/`, styled after the channel's
+profile picture: a dark navy-purple backdrop made from a frame of the clip, a striped
+sunset disc, a cyan neon "GTA 6" tag (or "TOP 3" on a compilation), the clip's headline in
+ice blue, and a thin sunset-gradient frame. Pick it as the cover when you post on TikTok and
 Instagram. YouTube Shorts usually only lets you choose a frame from the video.
 
 ## Commentary and voiceover
