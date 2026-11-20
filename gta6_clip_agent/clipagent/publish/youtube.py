@@ -12,6 +12,7 @@ from pathlib import Path
 import requests
 
 from ..config import settings
+from .common import full_caption, tags as clip_tags
 
 TIMEOUT = 60
 
@@ -35,14 +36,14 @@ def upload_short(clip: dict, privacy: str = "private") -> str:
     if not (settings.youtube_client_id and settings.youtube_refresh_token):
         raise RuntimeError("YouTube OAuth credentials are not configured")
     path = Path(clip["rendered_path"])
-    tags = json.loads(clip["hashtags"] or "[]")
+    tags = clip_tags(clip)
     title = clip["title"][:90]
     if "#shorts" not in title.lower():
         title = f"{title} #Shorts"[:100]
     body = {
         "snippet": {
             "title": title,
-            "description": f"{clip['caption']}\n\n" + " ".join(f"#{t}" for t in tags),
+            "description": full_caption(clip),
             "tags": tags,
             "categoryId": "20",  # Gaming
         },

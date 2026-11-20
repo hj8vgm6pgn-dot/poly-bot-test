@@ -16,6 +16,9 @@ see what's connected and how close each account is to monetization.
 - [ ] Set up public hosting for rendered clips (needed for Reels): `PUBLIC_VIDEO_BASE_URL`
 - [ ] **Connect TikTok**: create the developer app and set `TIKTOK_ACCESS_TOKEN`
 - [ ] **Connect YouTube**: create the channel, set up OAuth and set the `YOUTUBE_*` keys
+- [ ] **Get permission** from creators: join clipping programs and message creators (section 4)
+- [ ] Register each one with `python -m clipagent sources add ...`
+- [ ] Set up a voiceover provider (section 5, optional)
 - [ ] Turn on monetization on each platform once eligible (below)
 - [ ] Run `python -m clipagent accounts` and confirm all three show as connected
 
@@ -82,16 +85,86 @@ Use `python -m clipagent compile` to build 65–110s cuts from your best moments
 
 ---
 
-## Staying monetizable with gameplay content
+## 4. Getting footage you are allowed to clip
 
-All three platforms demonetize *reused* or *unoriginal* content. Raw gameplay with no added
-value is the most common reason gaming channels get rejected. To stay eligible:
+The agent only clips channels on its approved-sources list, and each one needs proof.
 
-- Use **only your own captures**. Never re-upload other creators' clips or Rockstar trailers.
-- Add **your own creative input** to every video: commentary or voiceover, reactions, edits,
-  and the hook text the agent adds. Voiceover counts most.
-- Rockstar/Take-Two generally lets creators monetize their own gameplay videos. Don't
-  present your videos as official, and don't post leaked or pre-release material.
-- Make each upload different: don't post the same clip twice on one platform. Cross-posting
+### Clipping programs
+
+Creators (and agencies working for them) pay clippers per view and publish the rules.
+
+1. Find campaigns: search Whop for "clipping" or "content rewards", and check the Discord
+   servers and channel descriptions of GTA 6 streamers for a "clipping program" link.
+2. Read the rules before you join. Note the payout per 1,000 views, required hashtags or
+   mentions, which platforms count, minimum view counts, and whether they supply raw footage.
+3. Join, then register it:
+   ```bash
+   python -m clipagent sources add @creator --permission clipping_program \
+       --proof <campaign link> --payout <rate> --tags <required,hashtags> --rules "<key rules>"
+   ```
+4. Most campaigns pay only after you **submit your post links** on their platform. The agent
+   tracks estimated payouts (`metrics`), but submitting the links is on you.
+
+For Twitch or Kick streamers add `--platform twitch` (or `kick`) and use their login name.
+
+### Direct permission
+
+Mid-sized creators often say yes, because a clips channel is free promotion. A message
+that works:
+
+> Hi [name], I run ViceOnTheIce, a GTA 6 shorts channel on TikTok, Reels and YouTube Shorts.
+> I'd like to clip moments from your GTA 6 videos into vertical shorts. Every clip would
+> credit you on screen and in the caption with your handle, and I'd take any clip down on
+> request. Are you OK with that? If you have rules (hashtags, links, things to avoid),
+> send them and I'll follow them.
+
+Save the reply (screenshot or email) in a `proofs/` folder and register it:
+
+```bash
+python -m clipagent sources add @creator --permission direct --proof proofs/creator_dm.png
+```
+
+If they set an end date, add `--expires YYYY-MM-DD`. If they withdraw permission, run
+`sources disable <id>` and delete the posted clips.
+
+### Creative Commons
+
+`python -m clipagent discover --cc` finds GTA 6 videos published under YouTube's CC BY
+licence and credits them the way the licence requires. Expect few results, and check each
+one: some uploaders mark videos CC that they do not own.
+
+### Things permission does not cover
+
+- A creator can only give permission for **their own** recording and voice. Music playing in
+  their stream can still trigger a claim on your clip.
+- Keep the proof. If a clip gets a copyright claim, the proof is what you dispute it with.
+- Content ID claims can still happen automatically even when you have permission.
+
+## 5. Voiceover (optional, recommended)
+
+For spoken commentary, create an ElevenLabs account, pick a voice, and set
+`ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` in `.env`. Without it the commentary is
+shown as captions only. TikTok asks you to label AI-generated content: turn on the
+"AI-generated" label when you post clips that use a synthetic voice.
+
+---
+
+## Staying monetizable with clips of other creators
+
+All three platforms demonetize *reused* content, and permission alone does not exempt you.
+What keeps a clips channel eligible:
+
+- **Add something to every clip.** The agent adds a hook, commentary captions and a
+  voiceover. Your own recorded voice is stronger than a synthetic one.
+- **Credit the creator** on screen and in the caption. The agent does this automatically.
+- **Only use approved sources.** Never re-upload Rockstar trailers or creators who have
+  not agreed.
+- Do not present the videos as official, and do not post leaked or pre-release material.
+- Make each upload different: do not post the same clip twice on one platform. Posting
   the same video to all three platforms is fine.
 - Post consistently. One or two posts a day per platform is a good target.
+
+Be realistic about YouTube: it is the strictest of the three about reused content, and
+clips channels are sometimes refused monetization even when they follow all of this.
+Clipping-program payouts do not depend on platform monetization, so they are the more
+reliable income early on.

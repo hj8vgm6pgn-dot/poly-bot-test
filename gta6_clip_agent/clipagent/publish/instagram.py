@@ -6,13 +6,13 @@ to the folder URL that mirrors your OUTPUT_DIR/rendered directory.
 """
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 
 import requests
 
 from ..config import settings
+from .common import full_caption
 
 GRAPH = "https://graph.facebook.com/v21.0"
 TIMEOUT = 60
@@ -25,8 +25,7 @@ def publish_reel(clip: dict, poll_seconds: int = 300) -> str:
         raise RuntimeError("PUBLIC_VIDEO_BASE_URL is required for Instagram (video must be at a public URL)")
 
     video_url = f"{settings.public_video_base_url.rstrip('/')}/{Path(clip['rendered_path']).name}"
-    tags = json.loads(clip["hashtags"] or "[]")
-    caption = f"{clip['caption']}\n\n" + " ".join(f"#{t}" for t in tags)
+    caption = full_caption(clip)
     auth = {"access_token": settings.ig_access_token}
 
     r = requests.post(

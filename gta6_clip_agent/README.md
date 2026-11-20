@@ -1,18 +1,22 @@
 # GTA 6 Viral Clip Agent
 
-Turns your long GTA 6 gameplay recordings into ready-to-post vertical shorts for
-TikTok, Instagram Reels and YouTube Shorts, and learns from what performs.
+Finds the best GTA 6 moments in footage from creators who have **given you
+permission**, turns them into credited vertical shorts with your own commentary,
+and posts them to TikTok, Instagram Reels and YouTube Shorts.
 
 ```
-footage/*.mp4 ──► analyze (audio + motion signals) ──► top N moments per recording
-                                                         │
-trends (YT search, IG hashtags, your own stats) ──► Claude judges frames, writes hook/title/caption
-                                                         │
-                                       render 1080x1920 (blur-fill, hook text, -14 LUFS)
-                                                         │
-                                    you review + approve ──► publish (YT / IG / TikTok draft)
-                                                         │
-                                       metrics ──► fed back into the next scoring run
+approved sources (clipping programs, direct permission, Creative Commons)
+        │  discover + fetch (blocked for any channel not on the list)
+        ▼
+footage ──► analyze (audio + motion signals) ──► top moments per video
+                                                   │
+trends + your own stats ──► Claude judges frames, writes hook / title / caption / commentary
+                                                   │
+        render 1080x1920: hook text, commentary captions + voiceover, creator credit
+                                                   │
+                 you review + approve ──► publish (YT / IG / TikTok draft)
+                                                   │
+                       metrics ──► next scoring run, and estimated program payouts
 ```
 
 ## Setup
@@ -23,29 +27,72 @@ pip install -r requirements.txt     # also needs ffmpeg on PATH
 cp .env.example .env                # fill in the keys you have; every platform is optional
 ```
 
-**First-time setup:** follow [SETUP.md](SETUP.md) to create and connect the
-Instagram, TikTok and YouTube accounts and turn on monetization.
-
-Drop your recordings (OBS, console capture, etc.) into `footage/`.
+**First-time setup:** follow [SETUP.md](SETUP.md) to connect the accounts, get
+permission from creators, and turn on monetization.
 
 ## Usage
 
 ```bash
-python -m clipagent trends            # pull trending GTA 6 shorts metadata
-python -m clipagent scan              # find + score moments (add --no-ai to skip Claude)
-python -m clipagent render --min 65   # render candidates scoring >= 65
-python -m clipagent review            # see rendered clips, hooks and Claude's reasoning
+# 1. Say who you are allowed to clip
+python -m clipagent sources add @creator --permission clipping_program \
+    --proof https://whop.com/their-campaign --payout 1.5 --tags creatorclips
+python -m clipagent sources add @othercreator --permission direct --proof proofs/dm.png
+python -m clipagent sources list
+
+# 2. Get footage (only from approved sources)
+python -m clipagent discover --cc     # their GTA 6 uploads, plus Creative Commons videos
+python -m clipagent videos
+python -m clipagent fetch --top 3
+python -m clipagent import vod.mp4 --source 2   # a file the creator sent you
+
+# 3. Make clips
+python -m clipagent trends
+python -m clipagent scan              # add --no-ai to skip Claude
+python -m clipagent render --min 65
+python -m clipagent compile           # 65-110s cut (TikTok only pays on 60s+)
+python -m clipagent review
 python -m clipagent approve 3 7       # or: reject 4
+
+# 4. Post and learn
 python -m clipagent publish --dry-run
 python -m clipagent publish --platforms youtube,tiktok --yt-privacy unlisted
-python -m clipagent metrics           # refresh views/likes; best posts steer future scoring
-python -m clipagent compile           # 65-110s cut of top moments (TikTok only pays on 60s+)
-python -m clipagent accounts          # connection check + monetization progress per platform
+python -m clipagent metrics           # views, likes, estimated clipping-program payouts
+python -m clipagent accounts          # connection check + monetization progress
 
-python -m clipagent run               # trends + scan + render + review in one go
+python -m clipagent run               # trends + discover + fetch + scan + render + review
 ```
 
 Nothing is posted until you `approve` it.
+
+## The permission gate
+
+Every source records *why* you may use it and the proof. The gate runs at
+download, scan, render and publish:
+
+| Permission | What it means | Proof needed |
+|---|---|---|
+| `clipping_program` | The creator runs a clipping campaign | Link to the campaign or its rules |
+| `direct` | The creator agreed in writing | The email or DM (link or saved file) |
+| `creative_commons` | That video carries YouTube's CC BY licence | Checked on the video itself, twice |
+| `own` | Your own recordings | None |
+
+- A download is refused unless the video's real channel matches the approved channel.
+- Footage sitting in `footage/` with no source attached is skipped.
+- If a permission expires or you `disable` a source, its clips can no longer be rendered or posted.
+- Every clip carries the creator's credit on screen and in the caption, plus any
+  hashtags their campaign requires.
+
+Creative Commons has a known weakness: some uploaders mark videos CC that they
+do not own. Look at those before approving the clips.
+
+## Commentary and voiceover
+
+Platforms demonetize channels that repost footage with nothing added, even with
+permission. So Claude writes one or two sentences of original commentary per clip.
+It is burned in as captions and, if a voice provider is configured, spoken over
+the clip with the original audio lowered underneath. Providers: ElevenLabs
+(`ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID`), or the free local `piper` /
+`espeak-ng`. Recording the line in your own voice is better still.
 
 ## What each platform API allows
 
@@ -55,30 +102,19 @@ Nothing is posted until you `approve` it.
 | Instagram | Hashtag top media (Business/Creator account) | Media insights | Reels via Graph API; the video must be at a public URL (`PUBLIC_VIDEO_BASE_URL`) |
 | TikTok | No public search (Research API is for approved researchers only) | Your own videos (`video.list`) | Draft to your TikTok inbox (`video.upload`). Direct posting needs an audited app |
 
-TikTok drafts are actually useful: you can add a trending sound in the app before
-posting, and that often matters more than anything else.
-
-## Footage and copyright
-
-The agent edits **your own captures**. It reads only metadata (titles, hashtags,
-counts) from other creators' posts to see which topics are trending, and never
-downloads their videos. Re-uploading other people's clips or Rockstar's trailers
-gets you copyright strikes and limits reach on all three platforms.
-
 ## How moments are scored
 
 1. **Signals** (`clipagent/analyze.py`): loudness, sudden audio spikes, motion and cuts,
    sampled 4x/sec and z-scored. Windows of 12–35 s are scored on how strong the first
-   3 seconds are, how intense the clip stays, and whether it ends on action (which helps loops).
-2. **Claude** (`clipagent/score.py`): sees 8 frames per candidate plus current trends and
-   your best past posts. It returns a 0–100 score, a keep/drop decision, a trim, the on-screen
-   hook, a title, a caption and hashtags. It uses structured JSON output, and the
-   trend context is prompt-cached across candidates.
+   3 seconds are, how intense the clip stays, and whether it ends on action.
+2. **Claude** (`clipagent/score.py`): sees 8 frames per candidate plus current trends,
+   your best past posts and which creator the footage is from. It returns a 0–100 score,
+   a keep/drop decision, a trim, the hook, a title, a caption, hashtags and the commentary.
 
 Model and effort are set with `CLAUDE_MODEL` / `CLAUDE_EFFORT` (default `claude-opus-5-5`, `high`).
 
 ## Tests
 
 ```bash
-python -m pytest -q tests     # builds a synthetic video; no network or API calls
+python -m pytest -q tests     # builds synthetic videos; no network or API calls
 ```

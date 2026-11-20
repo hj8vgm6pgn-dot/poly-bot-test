@@ -55,6 +55,18 @@ class Settings:
         default_factory=lambda: (_env("SEARCH_TERMS", "GTA 6,GTA VI,GTA 6 gameplay") or "").split(",")
     )
 
+    # Only videos from approved channels that mention one of these are picked up.
+    source_keywords: list[str] = field(
+        default_factory=lambda: (_env("SOURCE_KEYWORDS", "gta 6,gta vi,gta6,grand theft auto vi") or "").split(",")
+    )
+
+    # Voiceover (your channel's original commentary track)
+    tts_provider: str = _env("TTS_PROVIDER", "auto")  # auto | elevenlabs | piper | espeak | none
+    elevenlabs_api_key: str | None = _env("ELEVENLABS_API_KEY")
+    elevenlabs_voice_id: str | None = _env("ELEVENLABS_VOICE_ID")
+    elevenlabs_model: str = _env("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+    piper_model: str | None = _env("PIPER_MODEL")
+
     def ensure_dirs(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)

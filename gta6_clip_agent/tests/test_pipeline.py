@@ -96,7 +96,7 @@ def test_judge_parses_structured_output(video, tmp_path):
         "virality_score": 82, "keep": True, "category": "chase", "hook_text": "Cops had no chance",
         "title": "Vice City chase gone wrong", "caption": "Would you have made it?",
         "hashtags": ["gta6", "#gtavi"], "trim_start_offset_s": 1.0, "trim_end_offset_s": 0.5,
-        "reasoning": "Strong opening crash.",
+        "reasoning": "Strong opening crash.", "commentary": "Third time that bridge did this.",
     }
     calls = {}
 
@@ -115,8 +115,10 @@ def test_judge_parses_structured_output(video, tmp_path):
 
 
 def test_compile_over_one_minute(video, tmp_path):
-    segs = [(video, 0, 25, True), (video, 28, 50, True), (video, 40, 58, True)]
-    out = edit.compile_segments(segs, "Three wild moments", tmp_path / "comp.mp4", FONT)
+    segs = [dict(source=video, start_s=0, end_s=25, hook="Three wild moments", credit="Clip: @a"),
+            dict(source=video, start_s=28, end_s=50, hook="", credit="Clip: @b"),
+            dict(source=video, start_s=40, end_s=58, hook="", credit="Clip: @a")]
+    out = edit.compile_segments(segs, tmp_path / "comp.mp4", FONT)
     dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                                 "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout)
     assert dur > 60

@@ -1,17 +1,30 @@
 """Command-line entry point.
 
+Sources (who you are allowed to clip):
+    python -m clipagent sources add @creator --permission clipping_program --proof <link> [--payout 1.5]
+    python -m clipagent sources add @creator --permission direct --proof <email/DM screenshot path>
+    python -m clipagent sources list | disable <id> | enable <id>
+
+Footage:
+    python -m clipagent discover [--cc]     # list GTA 6 videos from approved channels (+ Creative Commons)
+    python -m clipagent videos              # show what was found
+    python -m clipagent fetch --top 3       # download from approved sources only
+    python -m clipagent import clip.mp4 --source 2   # footage a creator sent you directly
+
+Clips:
     python -m clipagent trends              # pull trending GTA 6 shorts metadata
-    python -m clipagent scan [--no-ai]      # find + score moments in footage/
-    python -m clipagent render [--min 60]   # render the best candidates to 9:16
+    python -m clipagent scan [--no-ai]      # find + score moments
+    python -m clipagent render [--min 60]   # 9:16 render with credit, captions, voiceover
+    python -m clipagent compile             # 60s+ cut of top moments (TikTok rewards)
     python -m clipagent review              # list rendered clips awaiting approval
-    python -m clipagent approve 3 5 7       # mark clips as approved (or: reject 4)
+    python -m clipagent approve 3 5 7       # or: reject 4
     python -m clipagent publish [--platforms youtube,tiktok,instagram] [--dry-run]
     python -m clipagent metrics             # refresh views/likes for posted clips
-    python -m clipagent compile             # stitch top moments into a 60s+ cut (TikTok rewards)
-    python -m clipagent accounts            # check connections + monetization progress
-    python -m clipagent run                 # trends + scan + render in one go
+    python -m clipagent accounts            # connection check + monetization progress
+    python -m clipagent run                 # trends + discover + fetch + scan + render
 
-Nothing is posted without an explicit `approve` first.
+Nothing is fetched from a channel that is not an approved source, and nothing is
+posted without an explicit `approve` first.
 """
 from __future__ import annotations
 
@@ -21,14 +34,124 @@ import logging
 import tempfile
 from pathlib import Path
 
-from . import analyze, edit, trends
+from . import analyze, edit, sources, trends, voice
 from .config import settings
 from .db import DB
+from .sources import PermissionError_
 
 log = logging.getLogger("clipagent")
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
 
 
+# --------------------------------------------------------------------------- sources
+def cmd_sources(db: DB, args) -> None:
+    if args.action == "list":
+        rows = db.sources()
+        if not rows:
+            print("No approved sources yet. Add one with `sources add` (see SETUP.md for how to get permission).")
+        for s in rows:
+            problem = sources.permission_problem(s)
+            views, payout = db.source_earnings(s["id"])
+            state = "OK" if not problem else f"BLOCKED: {problem}"
+            print(f"#{s['id']:<3} {s['name']} ({s['platform']}, {s['permission']})  {state}")
+            print(f"      credit: {s['credit']}  proof: {s['proof'] or '-'}  expires: {s['expires_at'] or '-'}")
+            if s["payout_per_1k"]:
+                print(f"      payout: {s['payout_per_1k']}/1k views  posted views: {views:,}  est. earned: {payout:.2f}")
+            if s["rules"]:
+                print(f"      rules: {s['rules']}")
+        return
+    if args.action in ("disable", "enable"):
+        db.update_source(int(args.ref), active=1 if args.action == "enable" else 0)
+        print(f"source #{args.ref}: {args.action}d")
+        return
+
+    # add
+    if args.permission == "own":
+        info = {"channel_id": "own", "name": "My recordings", "handle": ""}
+        platform = "own"
+    elif args.platform == "youtube":
+        info = sources.resolve_youtube_channel(args.ref)
+        platform = "youtube"
+    else:
+        # Twitch/Kick/etc: the id must match what the platform reports as the uploader.
+        info = {"channel_id": args.ref.lstrip("@"), "name": args.ref.lstrip("@"), "handle": args.ref}
+        platform = args.platform
+    if args.permission in ("clipping_program", "direct") and not args.proof:
+        raise SystemExit("--proof is required: a link or file showing the creator's permission "
+                         "(campaign page, email, DM screenshot).")
+    if args.permission == "creative_commons":
+        raise SystemExit("Creative Commons sources are added automatically by `discover --cc`, "
+                         "one video at a time, after the licence is checked.")
+    handle = info["handle"] if str(info["handle"]).startswith("@") else f"@{info['handle']}".rstrip("@")
+    sid = db.add_source(
+        name=info["name"], platform=platform, channel_id=info["channel_id"], handle=handle,
+        permission=args.permission, proof=args.proof or "", credit=args.credit or handle or info["name"],
+        required_tags=json.dumps([t.strip().lstrip("#") for t in (args.tags or "").split(",") if t.strip()]),
+        rules=args.rules or "", payout_per_1k=args.payout, expires_at=args.expires, active=1,
+    )
+    print(f"Approved source #{sid}: {info['name']} ({args.permission})")
+
+
+def cmd_discover(db: DB, args) -> None:
+    total = 0
+    for s in db.sources():
+        if s["platform"] != "youtube" or s["permission"] not in ("clipping_program", "direct"):
+            continue
+        problem = sources.permission_problem(s)
+        if problem:
+            print(f"skip {s['name']}: {problem}")
+            continue
+        n = sources.discover_channel(db, s)
+        print(f"{s['name']}: {n} GTA 6 videos")
+        total += n
+    if args.cc:
+        for term in settings.search_terms:
+            if term.strip():
+                n = sources.discover_creative_commons(db, term.strip())
+                print(f"Creative Commons '{term.strip()}': {n} videos")
+                total += n
+        print("Check Creative Commons results before using them: some uploaders mark videos "
+              "CC that they do not own.")
+    print(f"{total} videos discovered. See them with `videos`, download with `fetch`.")
+
+
+def cmd_videos(db: DB, _args) -> None:
+    for v in db.videos():
+        s = db.source(v["source_id"]) or {}
+        mins = f"{v['duration_s'] / 60:5.1f}m" if v["duration_s"] else "    ?"
+        print(f"#{v['id']:<4} [{v['status']:<10}] {v['views'] or 0:>10,} views {mins}  "
+              f"{s.get('name', '?')}: {v['title'][:60]}")
+
+
+def cmd_fetch(db: DB, args) -> None:
+    if args.ids:
+        vids = [v for v in (db.video(i) for i in args.ids) if v]
+    else:
+        vids = db.videos("discovered")[: args.top]
+    if not vids:
+        print("Nothing to fetch. Run `discover` first.")
+        return
+    for v in vids:
+        try:
+            path = sources.fetch(db, v, max_minutes=args.max_minutes)
+            print(f"#{v['id']} downloaded -> {path}")
+        except PermissionError_ as e:
+            db.update_video(v["id"], status="skipped")
+            print(f"#{v['id']} BLOCKED: {e}")
+        except RuntimeError as e:
+            print(f"#{v['id']} failed: {e}")
+
+
+def cmd_import(db: DB, args) -> None:
+    src = db.source(args.source)
+    try:
+        vid = sources.import_file(db, Path(args.file), src, title=args.title or "", url=args.url or "")
+    except PermissionError_ as e:
+        raise SystemExit(f"BLOCKED: {e}")
+    print(f"Registered as video #{vid} from {src['name']}")
+
+
+# --------------------------------------------------------------------------- clips
 def cmd_trends(db: DB, _args) -> None:
     n = trends.collect(db)
     print(f"Stored {n} trend items. Top 10:")
@@ -37,11 +160,16 @@ def cmd_trends(db: DB, _args) -> None:
 
 
 def cmd_scan(db: DB, args) -> None:
-    files = sorted(p for p in settings.footage_dir.rglob("*") if p.suffix.lower() in VIDEO_EXT)
-    if not files:
-        print(f"No footage found in {settings.footage_dir}/ - drop your GTA 6 recordings there.")
+    vids = db.videos("downloaded") + (db.videos("scanned") if args.rescan else [])
+    known = {str(Path(v["local_path"]).resolve()) for v in db.videos() if v["local_path"]}
+    stray = [p for p in settings.footage_dir.rglob("*")
+             if p.suffix.lower() in VIDEO_EXT and str(p.resolve()) not in known]
+    for p in stray:
+        print(f"skip {p}: not linked to an approved source (use `import {p} --source <id>`)")
+    if not vids:
+        print("No footage to scan. Use `fetch` or `import` first.")
         return
-    already = {c["source"] for c in db.clips()}
+
     judge, context = None, ""
     if not args.no_ai:
         from .score import Judge, build_context
@@ -49,21 +177,31 @@ def cmd_scan(db: DB, args) -> None:
         judge = Judge()
         context = build_context(db.top_trends(25), db.best_posts(10))
 
-    for f in files:
-        if str(f) in already and not args.rescan:
-            print(f"skip (already scanned): {f}")
+    for v in vids:
+        src = db.source(v["source_id"])
+        problem = sources.permission_problem(src)
+        if problem:
+            print(f"skip #{v['id']}: {problem}")
             continue
-        print(f"scanning {f} ...")
+        f = Path(v["local_path"])
+        if not f.exists():
+            print(f"skip #{v['id']}: file missing ({f})")
+            continue
+        print(f"scanning #{v['id']} {f} ({src['name']}) ...")
+        required = json.loads(src.get("required_tags") or "[]")
+        credit = sources.credit_line(src, v)
         cands = analyze.find_candidates(
             f, settings.min_clip_s, settings.max_clip_s, settings.candidates_per_video
         )
         for c in cands:
             row = dict(source=str(f), start_s=c.start_s, end_s=c.end_s, signal_score=c.score,
-                       hook="", title="", caption="", hashtags="[]")
+                       source_id=src["id"], video_id=v["id"], credit=credit,
+                       hook="", title="", caption="", hashtags="[]", voiceover="")
             if judge:
                 with tempfile.TemporaryDirectory() as tmp:
                     frames = analyze.extract_frames(f, c.start_s, c.end_s, 8, Path(tmp))
-                    j = judge.judge(frames, c.duration, c.score, context)
+                    j = judge.judge(frames, c.duration, c.score, context,
+                                    source_note=f"creator {src['name']}, video \"{v['title']}\"")
                 if j is None:
                     print(f"  {c.start_s:7.1f}-{c.end_s:7.1f}s  (model gave no usable verdict)")
                     continue
@@ -71,17 +209,32 @@ def cmd_scan(db: DB, args) -> None:
                 end = c.end_s - max(0.0, j.trim_end_offset_s)
                 if end - start < 6:  # ignore trims that would gut the clip
                     start, end = c.start_s, c.end_s
+                tags = list(dict.fromkeys([h.lstrip("#") for h in j.hashtags] + required))
                 row.update(start_s=start, end_s=end, ai_score=j.virality_score,
                            hook=j.hook_text, title=j.title, caption=j.caption,
-                           hashtags=json.dumps([h.lstrip("#") for h in j.hashtags]),
+                           hashtags=json.dumps(tags), voiceover=j.commentary,
                            reasoning=f"[{j.category}] {j.reasoning}",
                            status="candidate" if j.keep else "rejected")
                 print(f"  {start:7.1f}-{end:7.1f}s  score {j.virality_score:3d}  {j.category:<12} {j.hook_text}")
             else:
+                tags = list(dict.fromkeys(["gta6", "gtavi", "gaming"] + required))
                 row.update(ai_score=None, hook="Wait for it...", title="GTA 6 moment #Shorts",
-                           caption="GTA 6 is wild", hashtags=json.dumps(["gta6", "gtavi", "gaming"]))
+                           caption="GTA 6 is wild", hashtags=json.dumps(tags))
                 print(f"  {c.start_s:7.1f}-{c.end_s:7.1f}s  signal {c.score:5.2f}")
             db.add_clip(**row)
+        db.update_video(v["id"], status="scanned")
+
+
+def _render_kwargs(db: DB, c: dict, vo_dir: Path, with_voice: bool = True) -> dict:
+    """Everything `edit.render` needs for one clip, after re-checking the permission."""
+    src = db.source(c["source_id"])
+    sources.require(src)
+    vo = None
+    if with_voice and c.get("voiceover"):
+        vo = voice.synthesize(c["voiceover"], vo_dir / f"vo_{c['id']:05d}")
+    return dict(source=Path(c["source"]), start_s=c["start_s"], end_s=c["end_s"], hook=c["hook"] or "",
+                has_audio=analyze.has_audio(Path(c["source"])), credit=sources.watermark(src),
+                commentary=c.get("voiceover") or "", voiceover=vo)
 
 
 def cmd_render(db: DB, args) -> None:
@@ -93,62 +246,24 @@ def cmd_render(db: DB, args) -> None:
     if not cands:
         print("Nothing to render. Run `scan` first (or lower --min).")
         return
+    if not voice.available_provider():
+        print("note: no voiceover provider configured; commentary will be captions only (see SETUP.md)")
     for c in cands:
         out = rendered_dir / f"clip_{c['id']:05d}.mp4"
-        print(f"rendering #{c['id']} -> {out}")
-        edit.render(Path(c["source"]), c["start_s"], c["end_s"], c["hook"] or "", out,
-                    settings.font_file, mode=args.mode, has_audio=analyze.has_audio(Path(c["source"])))
-        db.update_clip(c["id"], rendered_path=str(out), status="rendered")
-
-
-def cmd_review(db: DB, _args) -> None:
-    rows = db.clips("rendered") + db.clips("approved")
-    if not rows:
-        print("No rendered clips. Run `render` first.")
-        return
-    for c in rows:
-        score = "--" if c["ai_score"] is None else f"{c['ai_score']:.0f}"
-        print(f"#{c['id']:<4} [{c['status']:<8}] score {score:>3}  {c['end_s'] - c['start_s']:4.1f}s  {c['rendered_path']}")
-        print(f"       hook: {c['hook']}\n       title: {c['title']}\n       why: {c['reasoning'] or '-'}")
-
-
-def cmd_set_status(db: DB, ids: list[int], status: str) -> None:
-    for i in ids:
-        if not db.clip(i):
-            print(f"#{i}: not found")
+        try:
+            kw = _render_kwargs(db, c, settings.output_dir / "voice", with_voice=not args.no_voice)
+        except PermissionError_ as e:
+            print(f"#{c['id']} BLOCKED: {e}")
             continue
-        db.update_clip(i, status=status)
-        print(f"#{i}: {status}")
-
-
-def cmd_publish(db: DB, args) -> None:
-    from .publish import publish_reel, upload_draft, upload_short
-
-    platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
-    uploaders = {"youtube": lambda c: upload_short(c, privacy=args.yt_privacy),
-                 "tiktok": upload_draft, "instagram": publish_reel}
-    clips = db.clips("approved")
-    if not clips:
-        print("No approved clips. Use `review` and `approve <id>` first.")
-        return
-    for c in clips:
-        for p in platforms:
-            if args.dry_run:
-                print(f"[dry-run] would post #{c['id']} to {p}: {c['title']}")
-                continue
-            try:
-                ext_id = uploaders[p](c)
-                db.add_post(c["id"], p, ext_id, "posted" if p != "tiktok" else "draft")
-                print(f"#{c['id']} -> {p}: {ext_id}")
-            except Exception as e:  # keep going on other platforms
-                print(f"#{c['id']} -> {p} FAILED: {e}")
-        if not args.dry_run:
-            db.update_clip(c["id"], status="published")
+        print(f"rendering #{c['id']} -> {out}")
+        edit.render(out_path=out, font_file=settings.font_file, mode=args.mode, **kw)
+        db.update_clip(c["id"], rendered_path=str(out), status="rendered")
 
 
 def cmd_compile(db: DB, args) -> None:
     pool = [c for c in db.clips("candidate") + db.clips("rendered")
-            if c["source"] != "compilation" and (args.min is None or (c["ai_score"] or 0) >= args.min)]
+            if c["source"] != "compilation" and (args.min is None or (c["ai_score"] or 0) >= args.min)
+            and not sources.permission_problem(db.source(c["source_id"]))]
     pool.sort(key=lambda c: (c["ai_score"] or 0, c["signal_score"] or 0), reverse=True)
     chosen, total = [], 0.0
     for c in pool:
@@ -163,18 +278,84 @@ def cmd_compile(db: DB, args) -> None:
         print(f"Only {total:.0f}s of usable moments (need {args.min_seconds:.0f}s). Scan more footage.")
         return
     # Best moment first: it carries the hook and decides whether people keep watching.
-    segments = [(Path(c["source"]), c["start_s"], c["end_s"], analyze.has_audio(Path(c["source"])))
-                for c in chosen]
     lead = chosen[0]
+    segments = []
+    for i, c in enumerate(chosen):
+        kw = _render_kwargs(db, c, settings.output_dir / "voice", with_voice=not args.no_voice)
+        if i:
+            kw["hook"] = ""
+        segments.append(kw)
+    credits = list(dict.fromkeys(c["credit"] for c in chosen if c.get("credit")))
+    tags = list(dict.fromkeys(t for c in chosen for t in json.loads(c["hashtags"] or "[]")))
     cid = db.add_clip(source="compilation", start_s=0.0, end_s=total,
                       signal_score=sum(c["signal_score"] or 0 for c in chosen) / len(chosen),
                       ai_score=lead["ai_score"], hook=lead["hook"], title=lead["title"],
-                      caption=lead["caption"], hashtags=lead["hashtags"],
+                      caption=lead["caption"], hashtags=json.dumps(tags[:15]),
+                      source_id=lead["source_id"], credit="\n".join(credits),
                       reasoning="compilation of clips " + ", ".join(f"#{c['id']}" for c in chosen))
     out = settings.output_dir / "rendered" / f"clip_{cid:05d}.mp4"
     print(f"compiling {len(chosen)} moments ({total:.0f}s) -> {out}")
-    edit.compile_segments(segments, lead["hook"] or "", out, settings.font_file, mode=args.mode)
+    edit.compile_segments(segments, out, settings.font_file, mode=args.mode)
     db.update_clip(cid, rendered_path=str(out), status="rendered")
+
+
+def cmd_review(db: DB, _args) -> None:
+    rows = db.clips("rendered") + db.clips("approved")
+    if not rows:
+        print("No rendered clips. Run `render` first.")
+        return
+    for c in rows:
+        score = "--" if c["ai_score"] is None else f"{c['ai_score']:.0f}"
+        src = db.source(c["source_id"]) or {}
+        print(f"#{c['id']:<4} [{c['status']:<8}] score {score:>3}  {c['end_s'] - c['start_s']:4.1f}s  {c['rendered_path']}")
+        print(f"       from: {src.get('name', '?')} ({src.get('permission', '?')})")
+        print(f"       hook: {c['hook']}\n       title: {c['title']}")
+        if c.get("voiceover"):
+            print(f"       commentary: {c['voiceover']}")
+        print(f"       why: {c['reasoning'] or '-'}")
+
+
+def cmd_set_status(db: DB, ids: list[int], status: str) -> None:
+    for i in ids:
+        if not db.clip(i):
+            print(f"#{i}: not found")
+            continue
+        db.update_clip(i, status=status)
+        print(f"#{i}: {status}")
+
+
+def cmd_publish(db: DB, args) -> None:
+    from .publish import publish_reel, upload_draft, upload_short
+    from .publish.common import full_caption
+
+    platforms = [p.strip() for p in args.platforms.split(",") if p.strip()]
+    uploaders = {"youtube": lambda c: upload_short(c, privacy=args.yt_privacy),
+                 "tiktok": upload_draft, "instagram": publish_reel}
+    clips = db.clips("approved")
+    if not clips:
+        print("No approved clips. Use `review` and `approve <id>` first.")
+        return
+    for c in clips:
+        # Permissions can lapse between rendering and posting; check again at the door.
+        problem = sources.permission_problem(db.source(c["source_id"]))
+        if problem:
+            print(f"#{c['id']} BLOCKED: {problem}")
+            continue
+        for p in platforms:
+            if args.dry_run:
+                print(f"[dry-run] would post #{c['id']} to {p}: {c['title']}")
+                continue
+            try:
+                ext_id = uploaders[p](c)
+                db.add_post(c["id"], p, ext_id, "posted" if p != "tiktok" else "draft")
+                print(f"#{c['id']} -> {p}: {ext_id}")
+                if p == "tiktok":
+                    print("   TikTok drafts carry no caption. Paste this when you post it:\n   "
+                          + full_caption(c).replace("\n", "\n   "))
+            except Exception as e:  # keep going on other platforms
+                print(f"#{c['id']} -> {p} FAILED: {e}")
+        if not args.dry_run:
+            db.update_clip(c["id"], status="published")
 
 
 def cmd_accounts(_db: DB, _args) -> None:
@@ -205,6 +386,10 @@ def cmd_metrics(db: DB, _args) -> None:
                 print(f"{r['platform']:<9} {r['external_id']}: {m}")
         except Exception as e:
             print(f"{r['platform']} {r['external_id']}: failed ({e})")
+    for s in db.sources():
+        if s["payout_per_1k"]:
+            views, payout = db.source_earnings(s["id"])
+            print(f"{s['name']}: {views:,} views on your clips, est. program payout {payout:.2f}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -212,14 +397,46 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    so = sub.add_parser("sources", help="manage the creators you are allowed to clip")
+    so.add_argument("action", choices=["add", "list", "disable", "enable"])
+    so.add_argument("ref", nargs="?", help="@handle / channel URL / channel id (add), or source id")
+    so.add_argument("--permission", choices=list(sources.PERMISSIONS), default="direct")
+    so.add_argument("--platform", default="youtube", help="youtube (default), twitch, kick, ...")
+    so.add_argument("--proof", help="link or file showing the permission")
+    so.add_argument("--credit", help="how to credit them, e.g. @creator (default: their handle)")
+    so.add_argument("--tags", help="comma-separated hashtags the creator/campaign requires")
+    so.add_argument("--rules", help="campaign rules to remember")
+    so.add_argument("--payout", type=float, help="clipping-program payout per 1,000 views")
+    so.add_argument("--expires", help="date the permission ends, YYYY-MM-DD")
+
+    d = sub.add_parser("discover")
+    d.add_argument("--cc", action="store_true", help="also search Creative Commons GTA 6 videos")
+    sub.add_parser("videos")
+    f = sub.add_parser("fetch")
+    f.add_argument("ids", type=int, nargs="*")
+    f.add_argument("--top", type=int, default=3, help="fetch the N most-viewed discovered videos")
+    f.add_argument("--max-minutes", type=float, default=90)
+    im = sub.add_parser("import")
+    im.add_argument("file")
+    im.add_argument("--source", type=int, required=True)
+    im.add_argument("--title")
+    im.add_argument("--url")
+
     sub.add_parser("trends")
     s = sub.add_parser("scan")
     s.add_argument("--no-ai", action="store_true", help="signal analysis only, no Claude calls")
-    s.add_argument("--rescan", action="store_true", help="re-scan files already in the DB")
+    s.add_argument("--rescan", action="store_true", help="re-scan videos already scanned")
     r = sub.add_parser("render")
     r.add_argument("--min", type=float, default=None, help="minimum AI score to render")
     r.add_argument("--limit", type=int, default=10)
     r.add_argument("--mode", choices=["blur", "crop"], default="blur")
+    r.add_argument("--no-voice", action="store_true", help="captions only, no spoken commentary")
+    cp = sub.add_parser("compile")
+    cp.add_argument("--min-seconds", type=float, default=65)
+    cp.add_argument("--max-seconds", type=float, default=110)
+    cp.add_argument("--min", type=float, default=None, help="minimum AI score of included moments")
+    cp.add_argument("--mode", choices=["blur", "crop"], default="blur")
+    cp.add_argument("--no-voice", action="store_true")
     sub.add_parser("review")
     a = sub.add_parser("approve")
     a.add_argument("ids", type=int, nargs="+")
@@ -231,26 +448,37 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--dry-run", action="store_true")
     sub.add_parser("metrics")
     sub.add_parser("accounts")
-    cp = sub.add_parser("compile")
-    cp.add_argument("--min-seconds", type=float, default=65)
-    cp.add_argument("--max-seconds", type=float, default=110)
-    cp.add_argument("--min", type=float, default=None, help="minimum AI score of included moments")
-    cp.add_argument("--mode", choices=["blur", "crop"], default="blur")
     run = sub.add_parser("run")
     run.add_argument("--no-ai", action="store_true")
     run.add_argument("--min", type=float, default=60)
+    run.add_argument("--cc", action="store_true")
 
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(levelname)s %(message)s")
     settings.ensure_dirs()
     db = DB(settings.db_path)
+    ns = argparse.Namespace
 
-    if args.cmd == "trends":
+    if args.cmd == "sources":
+        if args.action != "list" and not args.ref and args.permission != "own":
+            ap.error("sources add/disable/enable needs a channel or source id")
+        cmd_sources(db, args)
+    elif args.cmd == "discover":
+        cmd_discover(db, args)
+    elif args.cmd == "videos":
+        cmd_videos(db, args)
+    elif args.cmd == "fetch":
+        cmd_fetch(db, args)
+    elif args.cmd == "import":
+        cmd_import(db, args)
+    elif args.cmd == "trends":
         cmd_trends(db, args)
     elif args.cmd == "scan":
         cmd_scan(db, args)
     elif args.cmd == "render":
         cmd_render(db, args)
+    elif args.cmd == "compile":
+        cmd_compile(db, args)
     elif args.cmd == "review":
         cmd_review(db, args)
     elif args.cmd == "approve":
@@ -263,12 +491,12 @@ def main(argv: list[str] | None = None) -> None:
         cmd_metrics(db, args)
     elif args.cmd == "accounts":
         cmd_accounts(db, args)
-    elif args.cmd == "compile":
-        cmd_compile(db, args)
     elif args.cmd == "run":
         cmd_trends(db, args)
-        cmd_scan(db, argparse.Namespace(no_ai=args.no_ai, rescan=False))
-        cmd_render(db, argparse.Namespace(min=None if args.no_ai else args.min, limit=10, mode="blur"))
+        cmd_discover(db, ns(cc=args.cc))
+        cmd_fetch(db, ns(ids=[], top=3, max_minutes=90))
+        cmd_scan(db, ns(no_ai=args.no_ai, rescan=False))
+        cmd_render(db, ns(min=None if args.no_ai else args.min, limit=10, mode="blur", no_voice=False))
         cmd_review(db, args)
 
 
