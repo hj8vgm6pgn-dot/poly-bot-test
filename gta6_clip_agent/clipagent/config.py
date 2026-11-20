@@ -18,13 +18,27 @@ def _env(name: str, default: str | None = None) -> str | None:
     return value if value not in (None, "") else default
 
 
+# (font file, family name for subtitles) - first one that exists is the default.
+_FONTS = [
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "DejaVu Sans"),
+    ("C:/Windows/Fonts/arialbd.ttf", "Arial"),
+    ("/System/Library/Fonts/Supplemental/Arial Bold.ttf", "Arial"),
+    ("/Library/Fonts/Arial Bold.ttf", "Arial"),
+]
+
+
+def _default_font() -> tuple[str, str]:
+    return next(((f, n) for f, n in _FONTS if Path(f).exists()), _FONTS[0])
+
+
 @dataclass
 class Settings:
     # Paths
     footage_dir: Path = field(default_factory=lambda: Path(_env("FOOTAGE_DIR", "footage")))
     output_dir: Path = field(default_factory=lambda: Path(_env("OUTPUT_DIR", "out")))
     db_path: Path = field(default_factory=lambda: Path(_env("DB_PATH", "out/clipagent.db")))
-    font_file: str = _env("FONT_FILE", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
+    font_file: str = _env("FONT_FILE", _default_font()[0])
+    subtitle_font: str = _env("SUBTITLE_FONT", _default_font()[1])  # family name of FONT_FILE
 
     # Clip shape
     min_clip_s: float = float(_env("MIN_CLIP_S", "12"))
@@ -70,6 +84,7 @@ class Settings:
     # Your own recordings: voice/clip_00012.m4a is used for clip #12 and pitched by VOICE_PITCH.
     voice_dir: Path = field(default_factory=lambda: Path(_env("VOICE_DIR", "voice")))
     voice_pitch: float = float(_env("VOICE_PITCH", "-3"))  # semitones; negative = deeper
+    voice_preset: str | None = _env("VOICE_PRESET")  # a named effect; overrides VOICE_PITCH
     tts_provider: str = _env("TTS_PROVIDER", "auto")  # auto | elevenlabs | piper | espeak | none
     elevenlabs_api_key: str | None = _env("ELEVENLABS_API_KEY")
     elevenlabs_voice_id: str | None = _env("ELEVENLABS_VOICE_ID")

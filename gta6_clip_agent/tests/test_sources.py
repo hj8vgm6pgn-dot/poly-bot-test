@@ -12,7 +12,7 @@ from clipagent.db import DB
 from clipagent.publish.common import full_caption
 from clipagent.sources import PermissionError_
 
-FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT = __import__("clipagent.config", fromlist=["settings"]).settings.font_file
 
 
 def _src(**over):

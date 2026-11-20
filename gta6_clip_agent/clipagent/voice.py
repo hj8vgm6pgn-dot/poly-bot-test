@@ -46,6 +46,37 @@ def recording_for(clip_id: int) -> Path | None:
     return None
 
 
+def _shift(pitch_st: float = 0.0, formant_st: float = 0.0) -> str:
+    """Filter chain that moves pitch and voice character (formants) independently.
+
+    Pitch is how high or low the voice is. Formants are what make it sound like a
+    particular person. Stage one moves both together by ``formant_st``; stage two
+    moves pitch alone to reach ``pitch_st``.
+    """
+    stages = []
+    if abs(formant_st) > 0.01:
+        stages.append(f"rubberband=pitch={2 ** (formant_st / 12):.5f}:formant=shifted:pitchq=quality")
+    rest = pitch_st - formant_st
+    if abs(rest) > 0.01:
+        stages.append(f"rubberband=pitch={2 ** (rest / 12):.5f}:formant=preserved:pitchq=quality")
+    return ",".join(stages) or "anull"
+
+
+# name: (description, filter chain)
+PRESETS: dict[str, tuple[str, str]] = {
+    "natural_low": ("Your own voice, a little lower. Character unchanged.",
+                    _shift(-2.0, 0.0)),
+    "warm": ("Slightly lower and fuller, with a touch of bass.",
+             _shift(-1.5, -1.5) + ",bass=g=3:f=140"),
+    "narrator": ("Lower, with a broadcast-style tone: more bass and more clarity.",
+                 _shift(-2.5, -1.0) + ",bass=g=4:f=120,equalizer=f=3500:t=q:w=1:g=3"),
+    "different": ("Same pitch as you, but a darker tone, so it sounds less like you.",
+                  _shift(0.0, -2.5)),
+    "light": ("A little higher and brighter.",
+              _shift(1.5, 1.5)),
+}
+
+
 def _trim_silence(pcm: "np.ndarray", sr: int, threshold_db: float = -45.0,
                   lead_s: float = 0.05, tail_s: float = 0.15) -> "np.ndarray":
     """Drop silence before the first and after the last audible 20 ms frame."""
@@ -65,8 +96,12 @@ def _trim_silence(pcm: "np.ndarray", sr: int, threshold_db: float = -45.0,
     return pcm[start:end]
 
 
-def process_recording(src: Path, out_path: Path, semitones: float | None = None) -> Path:
-    """Clean up a voice recording and shift its pitch (negative semitones = deeper).
+def process_recording(src: Path, out_path: Path, semitones: float | None = None,
+                      preset: str | None = None) -> Path:
+    """Clean up a voice recording and apply the voice effect.
+
+    The effect is a named preset (``preset`` or VOICE_PRESET) if one is set, otherwise
+    a plain pitch shift of ``semitones`` / VOICE_PITCH (negative = deeper).
 
     Steps: cut rumble and background hiss, trim silence at both ends, shift the pitch
     without changing speed, even out the level.
@@ -94,6 +129,11 @@ def process_recording(src: Path, out_path: Path, semitones: float | None = None)
                 f"asetrate={sr}*{ratio:.5f},aresample={sr},atempo={1 / ratio:.5f}"]
     if abs(st) < 0.01:
         shifters = ["anull"]
+    name = preset or (settings.voice_preset if semitones is None else None)
+    if name:
+        if name not in PRESETS:
+            raise RuntimeError(f"unknown voice preset '{name}'; choose from: {', '.join(PRESETS)}")
+        shifters = [PRESETS[name][1]]
     last = ""
     for shift in shifters:
         try:

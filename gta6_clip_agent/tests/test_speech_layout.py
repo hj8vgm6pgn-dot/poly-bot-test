@@ -7,7 +7,7 @@ import pytest
 
 from clipagent import edit, layout, transcribe
 
-FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT = __import__("clipagent.config", fromlist=["settings"]).settings.font_file
 
 
 def W(s, e, w):

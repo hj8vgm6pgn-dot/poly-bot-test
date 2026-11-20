@@ -21,6 +21,17 @@ trends + your own stats ──► Claude judges frames, writes hook / title / ca
 
 ## Setup
 
+**Windows:** open PowerShell in the `gta6_clip_agent` folder and run
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup_windows.ps1
+```
+
+It installs Python and ffmpeg if missing, installs the packages, creates `.env`, and runs
+the tests.
+
+**Mac / Linux:**
+
 ```bash
 cd gta6_clip_agent
 pip install -r requirements.txt     # also needs ffmpeg on PATH
@@ -132,7 +143,9 @@ python -m clipagent render --ids 12              # re-render that clip with your
 ```
 
 The agent removes background hiss, trims silence, evens out the volume and lowers
-the pitch by `VOICE_PITCH` semitones (default `-3`; try `-2` to `-5`). A lower pitch
+the pitch by `VOICE_PITCH` semitones (default `-3`; try `-2` to `-5`). Or pick a named
+effect with `VOICE_PRESET`: `natural_low`, `warm`, `narrator`, `different` (same pitch,
+different tone) or `light`. Try one with `voice-test me.m4a --preset warm`. A lower pitch
 makes your voice less recognisable to people who know you, but it is not real
 anonymity: the effect can be reversed.
 

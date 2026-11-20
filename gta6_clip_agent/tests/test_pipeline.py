@@ -11,7 +11,7 @@ from clipagent import analyze, edit
 from clipagent.db import DB
 from clipagent.score import ClipJudgement, _schema
 
-FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT = __import__("clipagent.config", fromlist=["settings"]).settings.font_file
 
 
 @pytest.fixture(scope="module")

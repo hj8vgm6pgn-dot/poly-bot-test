@@ -56,3 +56,14 @@ def test_recording_wins_over_tts(tmp_path, monkeypatch):
     _tone(tmp_path / "voice" / "clip_7.m4a")
     path, origin = voice.voiceover_for(7, "A line.", tmp_path / "out")
     assert origin == "recording" and path.exists()
+
+
+def test_presets_change_character_without_changing_length(tmp_path):
+    src = _tone(tmp_path / "me.wav", pad=False)
+    hz, dur = _peak_hz(voice.process_recording(src, tmp_path / "a", preset="natural_low"))
+    assert hz == pytest.approx(200 * 2 ** (-2 / 12), rel=0.03) and dur == pytest.approx(3.0, abs=0.3)
+    # "different" keeps the pitch and only changes the tone of the voice.
+    hz, _ = _peak_hz(voice.process_recording(src, tmp_path / "b", preset="different"))
+    assert hz == pytest.approx(200, rel=0.03)
+    with pytest.raises(RuntimeError, match="unknown voice preset"):
+        voice.process_recording(src, tmp_path / "c", preset="robot")

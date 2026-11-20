@@ -110,6 +110,8 @@ def build_filter(
 
     chain, n = "[base]", 0
     filters = [video]
+    # Windows paths contain a drive colon, which the filter syntax needs escaped.
+    font_arg = str(font_file).replace("\\", "/").replace(":", "\\:")
 
     def draw(text: str, size: int, y: str, enable: str | None, alpha: float = 1.0, border: int = 6,
              box: bool = False) -> None:
@@ -120,7 +122,7 @@ def build_filter(
         style = (":box=1:boxcolor=black@0.82:boxborderw=20" if box
                  else f":borderw={border}:bordercolor=black@{alpha}")
         filters.append(
-            f"{chain}drawtext=fontfile='{font_file}':text='{_escape_drawtext(text)}':"
+            f"{chain}drawtext=fontfile='{font_arg}':text='{_escape_drawtext(text)}':"
             f"fontsize={size}:fontcolor=white@{alpha}{style}:"
             f"x=(w-text_w)/2:y={y}{en}{out}"
         )
@@ -139,7 +141,7 @@ def build_filter(
 
     if subtitles:
         esc = str(subtitles).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-        fonts = str(Path(font_file).parent).replace(":", "\\:")
+        fonts = str(Path(font_file).parent).replace("\\", "/").replace(":", "\\:")
         out = f"[t{n}]"
         n += 1
         filters.append(f"{chain}ass=filename='{esc}':fontsdir='{fonts}'{out}")
@@ -187,7 +189,10 @@ def render(
     ass = None
     if captions:
         # Below the banner in the stacked layout, lower third otherwise.
-        ass = write_ass(captions, out_path.with_suffix(".ass"), y=1090 if mode == "stack" else 1330)
+        from .config import settings
+
+        ass = write_ass(captions, out_path.with_suffix(".ass"), y=1090 if mode == "stack" else 1330,
+                        font=settings.subtitle_font)
     vf = build_filter(hook, duration, font_file, mode, credit, commentary, vo_s, face, ass)
 
     cmd = ["ffmpeg", "-v", "error", "-y",
@@ -250,7 +255,7 @@ def compile_segments(
             part = silent
         parts.append(part)
     listing = parts_dir / "list.txt"
-    listing.write_text("".join(f"file '{p.resolve()}'\n" for p in parts))
+    listing.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in parts))
     subprocess.run(
         ["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
          "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",

@@ -376,11 +376,15 @@ def cmd_voice_test(_db: DB, args) -> None:
     """Process one recording so you can hear the pitch setting before using it."""
     out = settings.output_dir / "voice_test"
     try:
-        res = voice.process_recording(Path(args.file), out, semitones=args.pitch)
+        res = voice.process_recording(Path(args.file), out, semitones=args.pitch, preset=args.preset)
     except RuntimeError as e:
         raise SystemExit(str(e))
-    used = settings.voice_pitch if args.pitch is None else args.pitch
-    print(f"Wrote {res} at {used:+g} semitones. Listen, then set VOICE_PITCH in .env to the value you like.")
+    name = args.preset or (settings.voice_preset if args.pitch is None else None)
+    if name:
+        print(f"Wrote {res} with the '{name}' effect. To keep it, set VOICE_PRESET={name} in .env.")
+    else:
+        used = settings.voice_pitch if args.pitch is None else args.pitch
+        print(f"Wrote {res} at {used:+g} semitones. To keep it, set VOICE_PITCH in .env.")
 
 
 def cmd_review(db: DB, _args) -> None:
@@ -531,6 +535,7 @@ def main(argv: list[str] | None = None) -> None:
     vt = sub.add_parser("voice-test", help="hear your voice with the pitch effect")
     vt.add_argument("file")
     vt.add_argument("--pitch", type=float, default=None, help="semitones, e.g. -3 (deeper) to try")
+    vt.add_argument("--preset", choices=list(voice.PRESETS), help="a named voice effect to try")
     sub.add_parser("review")
     a = sub.add_parser("approve")
     a.add_argument("ids", type=int, nargs="+")
