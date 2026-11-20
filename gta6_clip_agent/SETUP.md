@@ -193,3 +193,19 @@ Be realistic about YouTube: it is the strictest of the three about reused conten
 clips channels are sometimes refused monetization even when they follow all of this.
 Clipping-program payouts do not depend on platform monetization, so they are the more
 reliable income early on.
+
+## Example: registering the Kai Cenat GTA 6 Marathon campaign (Content Rewards)
+
+Its rules require his name in the caption or overlay, the hashtag `#KAICENAT`, him as the
+main focus, no logos, and no templated thumbnails. Registered like this, the agent applies
+all of that to every clip from his channels:
+
+```bash
+python -m clipagent sources add @KaiCenatLive --permission clipping_program \
+    --proof "<campaign link on contentrewards.com>" --tags KAICENAT \
+    --name-in-headline --plain-cover --credit "Kai Cenat" \
+    --rules "Kai must be the main focus. Marathon streams from 18 Nov 2026 only. No logos. Nothing negative. No re-uploads of his own Shorts. Pool pays only above 750K total views."
+python -m clipagent sources add @KaiCenatGaming --permission clipping_program \
+    --proof "<campaign link on contentrewards.com>" --tags KAICENAT \
+    --name-in-headline --plain-cover --credit "Kai Cenat"
+```

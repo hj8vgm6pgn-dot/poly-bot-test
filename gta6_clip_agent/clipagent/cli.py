@@ -107,6 +107,7 @@ def cmd_sources(db: DB, args) -> None:
         required_tags=json.dumps([t.strip().lstrip("#") for t in (args.tags or "").split(",") if t.strip()]),
         rules=args.rules or "", payout_per_1k=args.payout, expires_at=args.expires, active=1,
         style=args.style, name_in_headline=1 if args.name_in_headline else 0,
+        plain_cover=1 if args.plain_cover else 0,
     )
     print(f"Approved source #{sid}: {info['name']} ({args.permission})")
 
@@ -289,9 +290,21 @@ def _cover_path(clip_id: int) -> Path:
     return settings.output_dir / "covers" / f"clip_{clip_id:05d}.jpg"
 
 
-def _make_cover(c: dict, tag: str = "GTA 6") -> None:
-    """Neon-style cover from a frame 40% of the way into the clip."""
+def _make_cover(c: dict, tag: str = "GTA 6", plain_from: Path | None = None) -> None:
+    """Neon-style cover from a frame 40% of the way into the clip.
+
+    ``plain_from``: for campaigns that forbid logos or templated thumbnails, save an
+    unbranded frame of the finished clip instead.
+    """
     try:
+        if plain_from is not None:
+            _cover_path(c["id"]).parent.mkdir(parents=True, exist_ok=True)
+            import subprocess
+
+            subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-ss",
+                            f"{0.4 * (c['end_s'] - c['start_s']):.2f}", "-i", str(plain_from),
+                            "-frames:v", "1", "-q:v", "3", str(_cover_path(c["id"]))], check=True)
+            return
         at = c["start_s"] + 0.4 * (c["end_s"] - c["start_s"])
         cover.make_cover(Path(c["source"]), at, c["hook"] or c["title"] or "GTA 6", _cover_path(c["id"]),
                          settings.font_file, tag=tag)
@@ -328,7 +341,8 @@ def cmd_render(db: DB, args) -> None:
         print(f"rendering #{c['id']} ({kw['mode']} layout, {note}) -> {out}")
         edit.render(out_path=out, font_file=settings.font_file, **kw)
         if not args.no_cover:
-            _make_cover(c)
+            plain = (db.source(c["source_id"]) or {}).get("plain_cover")
+            _make_cover(c, plain_from=out if plain else None)
         db.update_clip(c["id"], rendered_path=str(out),
                        status="approved" if c["status"] == "approved" else "rendered")
 
@@ -538,6 +552,8 @@ def main(argv: list[str] | None = None) -> None:
     so.add_argument("--expires", help="date the permission ends, YYYY-MM-DD")
     so.add_argument("--name-in-headline", action="store_true",
                     help="allow the creator's name in headlines and titles (only if their rules require it)")
+    so.add_argument("--plain-cover", action="store_true",
+                    help="unbranded cover (a frame of the clip) for campaigns that forbid logos")
     so.add_argument("--style", choices=["campaign", "commentary"],
                     help="campaign: original audio + subtitles (default for clipping programs); "
                          "commentary: your captions + voiceover")

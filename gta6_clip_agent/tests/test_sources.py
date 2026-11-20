@@ -95,7 +95,8 @@ def test_cli_flow_blocks_unapproved_footage(footage, tmp_path, monkeypatch, caps
     with pytest.raises(SystemExit, match="proof"):
         cli.main(["sources", "add", "streamer", "--platform", "twitch", "--permission", "direct"])
     cli.main(["sources", "add", "streamer", "--platform", "twitch", "--permission", "clipping_program",
-              "--proof", "https://example.com/campaign", "--tags", "streamerclips", "--payout", "1.5"])
+              "--proof", "https://example.com/campaign", "--tags", "streamerclips", "--payout", "1.5",
+              "--plain-cover"])
 
     # Stray footage with no source is ignored by scan.
     stray = settings.footage_dir / "random_download.mp4"
