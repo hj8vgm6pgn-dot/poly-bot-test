@@ -1,0 +1,5 @@
+out/
+footage/*
+!footage/.gitkeep
+.env
+__pycache__/
