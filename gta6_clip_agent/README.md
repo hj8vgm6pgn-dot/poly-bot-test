@@ -105,6 +105,10 @@ Each source has a style, set with `--style` when you add it:
 | `campaign` | The creator's original audio | Headline banner, subtitles of what they say, credit | 10–20 s | Clipping programs |
 | `commentary` | Original audio lowered under your voiceover | Hook, your commentary captions, credit | 12–35 s | Direct permission, Creative Commons |
 
+Headlines, titles and captions never use the creator's name: the channel sells the moment,
+and the creator is credited separately on screen and in the caption. If a campaign's rules
+require the name in the title, add that source with `--name-in-headline`.
+
 Campaign style is what clipping programs pay for: the creator's own voice, untouched.
 Commentary style adds more of your own input, which helps with platform monetization.
 

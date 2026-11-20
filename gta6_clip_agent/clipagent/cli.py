@@ -71,7 +71,8 @@ def cmd_sources(db: DB, args) -> None:
             views, payout = db.source_earnings(s["id"])
             state = "OK" if not problem else f"BLOCKED: {problem}"
             print(f"#{s['id']:<3} {s['name']} ({s['platform']}, {s['permission']}, {_style(s)} style)  {state}")
-            print(f"      credit: {s['credit']}  proof: {s['proof'] or '-'}  expires: {s['expires_at'] or '-'}")
+            print(f"      credit: {s['credit']}  proof: {s['proof'] or '-'}  expires: {s['expires_at'] or '-'}"
+                  + ("  name allowed in headlines" if s.get("name_in_headline") else ""))
             if s["payout_per_1k"]:
                 print(f"      payout: {s['payout_per_1k']}/1k views  posted views: {views:,}  est. earned: {payout:.2f}")
             if s["rules"]:
@@ -105,7 +106,7 @@ def cmd_sources(db: DB, args) -> None:
         permission=args.permission, proof=args.proof or "", credit=args.credit or handle or info["name"],
         required_tags=json.dumps([t.strip().lstrip("#") for t in (args.tags or "").split(",") if t.strip()]),
         rules=args.rules or "", payout_per_1k=args.payout, expires_at=args.expires, active=1,
-        style=args.style,
+        style=args.style, name_in_headline=1 if args.name_in_headline else 0,
     )
     print(f"Approved source #{sid}: {info['name']} ({args.permission})")
 
@@ -230,7 +231,7 @@ def cmd_scan(db: DB, args) -> None:
                         frames, c.duration, c.score, context,
                         source_note=f"creator {src['name']}, video \"{v['title']}\"",
                         transcript=transcribe.text_in(words, c.start_s, c.end_s, with_times=True) if words else "",
-                        style=style)
+                        style=style, name_allowed=bool(src.get("name_in_headline")))
                 if j is None:
                     print(f"  {c.start_s:7.1f}-{c.end_s:7.1f}s  (model gave no usable verdict)")
                     continue
@@ -250,7 +251,8 @@ def cmd_scan(db: DB, args) -> None:
                 print(f"  {start:7.1f}-{end:7.1f}s  score {j.virality_score:3d}  {j.category:<12} {j.hook_text}")
             else:
                 tags = list(dict.fromkeys(["gta6", "gtavi", "gaming"] + required))
-                row.update(ai_score=None, hook=f"{src['name']} on GTA 6" if style == "campaign" else "Wait for it...",
+                row.update(ai_score=None, hook=(f"{src['name']} on GTA 6" if src.get("name_in_headline") else "GTA 6 reaction")
+                           if style == "campaign" else "Wait for it...",
                            title="GTA 6 moment #Shorts",
                            caption="GTA 6 is wild", hashtags=json.dumps(tags))
                 print(f"  {c.start_s:7.1f}-{c.end_s:7.1f}s  signal {c.score:5.2f}")
@@ -496,6 +498,8 @@ def main(argv: list[str] | None = None) -> None:
     so.add_argument("--rules", help="campaign rules to remember")
     so.add_argument("--payout", type=float, help="clipping-program payout per 1,000 views")
     so.add_argument("--expires", help="date the permission ends, YYYY-MM-DD")
+    so.add_argument("--name-in-headline", action="store_true",
+                    help="allow the creator's name in headlines and titles (only if their rules require it)")
     so.add_argument("--style", choices=["campaign", "commentary"],
                     help="campaign: original audio + subtitles (default for clipping programs); "
                          "commentary: your captions + voiceover")

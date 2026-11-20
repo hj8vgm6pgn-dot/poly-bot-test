@@ -43,8 +43,12 @@ Write packaging in the voice of gaming TikTok: punchy and curiosity-driven. Rule
   after the payoff line. Prefer moments where the creator is talking or reacting over stretches \
   where a trailer or gameplay simply plays with nobody speaking.
 - In "campaign" style the clip keeps the creator's original audio with subtitles and no \
-  voiceover: the headline (hook text) should say who the creator is and what happens, e.g. \
-  "KAI REACTS TO THE MAP SIZE". Leave commentary as an empty string.
+  voiceover: the headline (hook text) should say what happens, e.g. \
+  "FIRST REACTION TO THE MAP SIZE". Leave commentary as an empty string.
+- Creator names: by default, never put the creator's name, handle or nickname in the hook text, \
+  title, caption or commentary. The channel sells the moment, not the person, and the creator \
+  is credited separately. Only when the request says "creator name allowed" may the hook text \
+  and title name the creator.
 - In "commentary" style, the commentary is the channel's own original contribution. Write one or two spoken sentences \
   (max 28 words) that add something: context, a reaction, a detail viewers would miss, or a \
   question that invites comments. Do not just describe what is visibly happening."""
@@ -103,6 +107,7 @@ class Judge:
         source_note: str = "",
         transcript: str = "",
         style: str = "commentary",
+        name_allowed: bool = False,
     ) -> ClipJudgement | None:
         content: list[dict] = [
             # Context first and cached: it is identical for every candidate in a run.
@@ -117,6 +122,8 @@ class Judge:
                 "(roughly -1 = calm, 0 = average, 2+ = very intense). "
                 + (f"Footage source: {source_note}. " if source_note else "")
                 + f"Clip style: {style}. "
+                + ("Creator name allowed in hook text and title (the campaign requires it). "
+                   if name_allowed else "Do not use the creator's name anywhere. ")
                 + (f"\n\nWhat is said in this window (offsets from its start):\n{transcript}\n\n"
                    if transcript else "No transcript is available for this window. ")
                 + "Judge this clip."

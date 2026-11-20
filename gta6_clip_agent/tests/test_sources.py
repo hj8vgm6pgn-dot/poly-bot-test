@@ -109,6 +109,7 @@ def test_cli_flow_blocks_unapproved_footage(footage, tmp_path, monkeypatch, caps
     cli.main(["scan", "--no-ai", "--no-speech"])
     clip = db.clips("candidate")[0]
     assert clip["credit"] == "Credit: @streamer"
+    assert "streamer" not in clip["hook"].lower() and "streamer" not in clip["title"].lower()
     assert "streamerclips" in json.loads(clip["hashtags"])
 
     cli.main(["render"])

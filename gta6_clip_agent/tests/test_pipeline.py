@@ -111,6 +111,10 @@ def test_judge_parses_structured_output(video, tmp_path):
     j = Judge(client=fake).judge(frames, 8.0, 1.5, "context")
     assert j.virality_score == 82 and j.category == "chase"
     assert calls["output_config"]["format"]["type"] == "json_schema"
+    said = calls["messages"][0]["content"][-1]["text"]
+    assert "Do not use the creator's name anywhere" in said
+    Judge(client=fake).judge(frames, 8.0, 1.5, "context", name_allowed=True)
+    assert "Creator name allowed" in calls["messages"][0]["content"][-1]["text"]
     assert sum(1 for b in calls["messages"][0]["content"] if b["type"] == "image") == 2
 
 
