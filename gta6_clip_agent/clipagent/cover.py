@@ -1,9 +1,10 @@
 """Cover images (thumbnails) in the channel's neon style.
 
-A darkened frame from the clip, a glowing cyan frame, a large hollow pink tag
-("GTA 6", or "TOP 3" for a compilation) and the clip's headline in white. Built
-with ffmpeg only: the neon parts are drawn on black, blurred for the glow, and
-screen-blended over the frame.
+Matches the profile picture: a purple-to-orange sunset wash over a darkened frame
+from the clip, a glowing frame in the same purple-to-orange gradient, a large
+hollow neon-pink tag ("GTA 6", or "TOP 3" for a compilation) and the clip's
+headline in ice blue. Built with ffmpeg only: the neon parts are drawn on black,
+blurred for the glow, and screen-blended over the frame.
 """
 from __future__ import annotations
 
@@ -13,7 +14,8 @@ from pathlib import Path
 from .edit import _escape_drawtext, _wrap
 
 W, H = 1080, 1920
-CYAN, PINK = "0x7df9ff", "0xff4fa3"
+PINK, ICE = "0xff4fa3", "0x9be8ff"
+PURPLE_RGB, ORANGE_RGB = (162, 75, 255), (255, 154, 61)
 
 
 def make_cover(
@@ -40,19 +42,32 @@ def make_cover(
     head_y = tag_y + tag_size + 40
     box_h = max(820, head_y + len(lines) * 104 + 70 - box_top)
 
-    neon = [f"drawbox=x=40:y={box_top}:w={W - 80}:h={box_h}:color={CYAN}:t=10",
-            # hollow lettering: black fill disappears under the screen blend, the pink edge stays
-            text(tag, tag_size, tag_y, color="black", border=11, border_color=PINK)]
-    neon += [text(line, 88, head_y + i * 104) for i, line in enumerate(lines)]
-    neon.append(f"drawtext=fontfile='{font}':text='{_escape_drawtext(channel)}':fontsize=40:"
-                f"fontcolor=white:x=60:y=150")
+    # hollow lettering: black fill disappears under the screen blend, the pink edge stays
+    words = [text(tag, tag_size, tag_y, color="black", border=11, border_color=PINK)]
+    words += [text(line, 88, head_y + i * 104, color=ICE) for i, line in enumerate(lines)]
+    words.append(f"drawtext=fontfile='{font}':text='{_escape_drawtext(channel)}':fontsize=40:"
+                 f"fontcolor=white:x=60:y=150")
 
+    # Vertical purple (top) to orange (bottom) gradient, computed per pixel so it is identical every time.
+    (r0, g0, b0), (r1, g1, b1) = PURPLE_RGB, ORANGE_RGB
+    grad = (f"color=c=black:s={W}x{H},format=gbrp,"
+            f"geq=r='{r0}+({r1 - r0})*Y/H':g='{g0}+({g1 - g0})*Y/H':b='{b0}+({b1 - b0})*Y/H'")
     graph = (
+        f"{grad},split=2[gwash][gline];"
+        # frame from the clip, darkened, with the sunset wash over it
         f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},"
-        f"eq=brightness=-0.22:saturation=1.15,gblur=sigma=3[base];"
-        f"color=c=black:s={W}x{H},format=gbrp,{','.join(neon)},split=2[sharp][soft];"
+        f"eq=saturation=0.9,gblur=sigma=3,format=gbrp[frame];"
+        f"[frame][gwash]blend=all_mode=normal:all_opacity=0.6,"
+        f"lutrgb=r='val*0.55':g='val*0.55':b='val*0.55'[base];"
+        # the gradient shows through a box-shaped mask, giving a purple-to-orange border
+        f"color=c=black:s={W}x{H},format=gbrp,"
+        f"drawbox=x=40:y={box_top}:w={W - 80}:h={box_h}:color=white:t=12[mask];"
+        f"color=c=black:s={W}x{H},format=gbrp[blk];"
+        f"[blk][gline][mask]maskedmerge[boxg];"
+        f"color=c=black:s={W}x{H},format=gbrp,{','.join(words)}[txt];"
+        f"[boxg][txt]blend=all_mode=screen,split=2[sharp][soft];"
         f"[soft]gblur=sigma=16[glow];"
-        f"[base]format=gbrp[b0];[b0][glow]blend=all_mode=screen[b1];"
+        f"[base][glow]blend=all_mode=screen[b1];"
         f"[b1][sharp]blend=all_mode=screen,format=yuvj420p[out]"
     )
     subprocess.run(
