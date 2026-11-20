@@ -217,3 +217,23 @@ The Twitch source is the quick route. `discover --period 7d` lists his most-view
 clips of the week, each a short moment viewers have already picked. `fetch --top 5` then
 downloads the five biggest, and `scan` and `render` turn them into your own vertical cuts.
 Check each one is from the GTA 6 marathon (18 Nov 2026 or later) before approving it.
+
+## Example: pay-per-view campaigns (DiegoLoveless, Bobby VanRiper, KreekCraft)
+
+Fill in the exact wording, hashtags and files from each campaign's brief after joining.
+`--cta` puts a call to action on screen for the last seconds and in the caption.
+`--overlay` keeps a supplied logo on screen for the whole clip.
+
+```bash
+python -m clipagent sources add diegoloveless --platform twitch --permission clipping_program \
+    --proof "<campaign link>" --payout 1.0 --name-in-headline \
+    --cta "Watch live: twitch.tv/diegoloveless" --credit "DiegoLoveless"
+
+python -m clipagent sources add <bobby's twitch login> --platform twitch --permission clipping_program \
+    --proof "<campaign link>" --payout 1.5 --name-in-headline --credit "Bobby VanRiper"
+
+python -m clipagent sources add <kreekcraft's channel> --permission clipping_program \
+    --proof "<campaign link>" --payout 1.0 --name-in-headline --credit "KreekCraft" \
+    --overlay assets/kreekcraft_logo.png --overlay-pos top-right \
+    --cta "Watch the full stream on KreekCraft's channel"
+```

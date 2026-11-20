@@ -79,6 +79,7 @@ def build_filter(
     commentary_s: float = 0.0,
     face: tuple[float, float, float, float] | None = None,
     subtitles: Path | None = None,
+    cta: str = "",
 ) -> str:
     half = H // 2
     if mode == "stack" and face:
@@ -158,6 +159,10 @@ def build_filter(
         # Kept above the area the apps cover with their own caption/buttons.
         draw(credit[:40], 38, str(H - 330), None, alpha=0.85, border=3)
 
+    if cta:
+        # Call to action a campaign asks for ("Watch live: twitch.tv/..."), over the last few seconds.
+        draw(cta[:44], 46, str(H - 460), f"gte(t,{max(0.0, duration - 4.0):.2f})", box=True)
+
     fade_out = max(0.0, duration - 0.3)
     filters.append(f"{chain}fade=t=in:st=0:d=0.15,fade=t=out:st={fade_out:.2f}:d=0.3,format=yuv420p[v]")
     return ";".join(filters)
@@ -177,8 +182,15 @@ def render(
     voiceover: Path | None = None,
     face: tuple[float, float, float, float] | None = None,
     captions: list[tuple[float, float, str]] | None = None,
+    cta: str = "",
+    overlay: Path | None = None,
+    overlay_pos: str = "top-right",
 ) -> Path:
-    """``mode``: blur | crop | stack. ``captions``: (start, end, text) cards of the creator's speech."""
+    """``mode``: blur | crop | stack. ``captions``: (start, end, text) cards of the creator's speech.
+
+    ``overlay``: a logo image a campaign requires on screen for the whole clip, placed at
+    ``overlay_pos`` (top-left, top-right, top-center, bottom-left or bottom-right).
+    """
     from .transcribe import write_ass
 
     duration = end_s - start_s
@@ -193,7 +205,7 @@ def render(
 
         ass = write_ass(captions, out_path.with_suffix(".ass"), y=1090 if mode == "stack" else 1330,
                         font=settings.subtitle_font)
-    vf = build_filter(hook, duration, font_file, mode, credit, commentary, vo_s, face, ass)
+    vf = build_filter(hook, duration, font_file, mode, credit, commentary, vo_s, face, ass, cta)
 
     cmd = ["ffmpeg", "-v", "error", "-y",
            "-ss", f"{start_s:.2f}", "-t", f"{duration:.2f}", "-i", str(source)]
@@ -212,6 +224,16 @@ def render(
             af = f"{vo};[vo]atrim=0:{duration:.2f},{fade}[a]"
     elif has_audio:
         af = f"[0:a]loudnorm=I=-14:TP=-1.5:LRA=11,{fade}[a]"
+
+    if overlay:
+        idx = 2 if voiceover else 1
+        cmd += ["-loop", "1", "-i", str(overlay)]
+        lw = int(W * 0.26)
+        x = {"left": "40", "right": f"{W}-w-40", "center": f"({W}-w)/2"}[overlay_pos.split("-")[1]]
+        y = "140" if overlay_pos.startswith("top") else f"{H}-h-470"
+        vf = (vf[: vf.rindex("[v]")] + "[vbase];"
+              f"[{idx}:v]scale={lw}:-1,format=rgba[logo];"
+              f"[vbase][logo]overlay=x={x}:y={y}:shortest=0,format=yuv420p[v]")
 
     cmd += ["-filter_complex", vf + (";" + af if af else ""), "-map", "[v]"]
     if af:

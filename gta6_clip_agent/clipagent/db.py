@@ -70,6 +70,9 @@ class DB:
         have = {r["name"] for r in self.conn.execute("PRAGMA table_info(sources)")}
         if "style" not in have:  # campaign | commentary
             self.conn.execute("ALTER TABLE sources ADD COLUMN style TEXT")
+        for col in ("overlay_path", "overlay_pos", "cta"):  # campaign-required logo and call to action
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE sources ADD COLUMN {col} TEXT")
         if "plain_cover" not in have:  # 1 = campaign forbids logos / templated thumbnails
             self.conn.execute("ALTER TABLE sources ADD COLUMN plain_cover INTEGER DEFAULT 0")
         if "name_in_headline" not in have:  # 1 = this source's rules require the creator's name

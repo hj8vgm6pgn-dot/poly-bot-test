@@ -87,3 +87,26 @@ def test_no_face_in_synthetic_footage(tmp_path):
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=10:d=4",
                     "-c:v", "libx264", "-preset", "ultrafast", str(src)], check=True)
     assert layout.detect_face(Path(src), 0, 4, samples=3) is None
+
+
+def test_campaign_logo_and_call_to_action(tmp_path):
+    src = tmp_path / "in.mp4"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x202020:s=1280x720:r=30:d=10",
+         "-f", "lavfi", "-i", "anoisesrc=d=10:a=0.2", "-shortest",
+         "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", str(src)], check=True)
+    logo = tmp_path / "logo.png"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=400x200:d=1",
+                    "-frames:v", "1", str(logo)], check=True)
+    out = edit.render(src, 0, 8, "Headline", tmp_path / "o.mp4", FONT, credit="Clip: @creator",
+                      cta="Watch live: twitch.tv/creator", overlay=logo, overlay_pos="top-right")
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", "6", "-i", str(out), "-frames:v", "1",
+                          "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True).stdout
+    import numpy as np
+
+    frame = np.frombuffer(raw, dtype=np.uint8).reshape(1920, 1080, 3)
+    r, g, b = frame[200, 900]                       # inside the logo, top right
+    assert r > 180 and g < 80 and b < 80
+    assert frame[1450:1560, 150:930].max() > 200    # white call-to-action text near the end
+    assert abs(float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                     "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout) - 8) < 0.5

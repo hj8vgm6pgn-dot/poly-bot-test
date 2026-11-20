@@ -108,6 +108,7 @@ def cmd_sources(db: DB, args) -> None:
         rules=args.rules or "", payout_per_1k=args.payout, expires_at=args.expires, active=1,
         style=args.style, name_in_headline=1 if args.name_in_headline else 0,
         plain_cover=1 if args.plain_cover else 0,
+        overlay_path=args.overlay, overlay_pos=args.overlay_pos, cta=args.cta,
     )
     print(f"Approved source #{sid}: {info['name']} ({args.permission})")
 
@@ -218,6 +219,8 @@ def cmd_scan(db: DB, args) -> None:
         print(f"scanning #{v['id']} {f} ({src['name']}) ...")
         required = json.loads(src.get("required_tags") or "[]")
         credit = sources.credit_line(src, v)
+        if src.get("cta"):
+            credit = f"{src['cta']}\n{credit}".strip()
         style = _style(src)
         lo, hi = ((settings.campaign_min_s, settings.campaign_max_s) if style == "campaign"
                   else (settings.min_clip_s, settings.max_clip_s))
@@ -290,6 +293,9 @@ def _render_kwargs(db: DB, c: dict, vo_dir: Path, with_voice: bool = True, mode:
     return dict(source=path, start_s=c["start_s"], end_s=c["end_s"], hook=c["hook"] or "",
                 has_audio=analyze.has_audio(path), credit=sources.watermark(src),
                 commentary=commentary, voiceover=vo, mode=chosen, face=face, _voice=vo_from,
+                cta=src.get("cta") or "",
+                overlay=Path(src["overlay_path"]) if src.get("overlay_path") and Path(src["overlay_path"]).exists() else None,
+                overlay_pos=src.get("overlay_pos") or "top-right",
                 # Our commentary captions and the creator's subtitles share the lower third.
                 captions=None if commentary else captions)
 
@@ -560,6 +566,10 @@ def main(argv: list[str] | None = None) -> None:
     so.add_argument("--expires", help="date the permission ends, YYYY-MM-DD")
     so.add_argument("--name-in-headline", action="store_true",
                     help="allow the creator's name in headlines and titles (only if their rules require it)")
+    so.add_argument("--overlay", help="logo image the campaign requires on screen for the whole clip")
+    so.add_argument("--overlay-pos", default="top-right",
+                    choices=["top-left", "top-right", "top-center", "bottom-left", "bottom-right"])
+    so.add_argument("--cta", help="call to action the campaign requires, e.g. \"Watch live: twitch.tv/name\"")
     so.add_argument("--plain-cover", action="store_true",
                     help="unbranded cover (a frame of the clip) for campaigns that forbid logos")
     so.add_argument("--style", choices=["campaign", "commentary"],
