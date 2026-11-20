@@ -130,6 +130,13 @@ Reaction videos have two owners: the creator owns the reaction, the game publish
 trailer on screen. The creator's permission covers only their part, so the agent favours
 moments where the creator is talking over stretches of raw trailer.
 
+## Covers
+
+Every rendered clip also gets a cover image in `out/covers/`, in the channel's neon style:
+a darkened frame from the clip, a glowing frame, a large "GTA 6" tag (or "TOP 3" on a
+compilation) and the clip's headline. Pick it as the cover when you post on TikTok and
+Instagram. YouTube Shorts usually only lets you choose a frame from the video.
+
 ## Commentary and voiceover
 
 Platforms demonetize channels that repost footage with nothing added, even with

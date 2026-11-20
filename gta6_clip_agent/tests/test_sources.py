@@ -113,6 +113,7 @@ def test_cli_flow_blocks_unapproved_footage(footage, tmp_path, monkeypatch, caps
     assert "streamerclips" in json.loads(clip["hashtags"])
 
     cli.main(["render"])
+    assert (settings.output_dir / "covers" / f"clip_{clip['id']:05d}.jpg").stat().st_size > 5000
     cli.main(["approve", str(clip["id"])])
 
     # Permission withdrawn after rendering: publishing is blocked.

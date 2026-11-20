@@ -37,7 +37,7 @@ import logging
 import tempfile
 from pathlib import Path
 
-from . import analyze, edit, layout, sources, transcribe, trends, voice
+from . import analyze, cover, edit, layout, sources, transcribe, trends, voice
 from .config import settings
 from .db import DB
 from .sources import PermissionError_
@@ -285,6 +285,20 @@ def _render_kwargs(db: DB, c: dict, vo_dir: Path, with_voice: bool = True, mode:
                 captions=None if commentary else captions)
 
 
+def _cover_path(clip_id: int) -> Path:
+    return settings.output_dir / "covers" / f"clip_{clip_id:05d}.jpg"
+
+
+def _make_cover(c: dict, tag: str = "GTA 6") -> None:
+    """Neon-style cover from a frame 40% of the way into the clip."""
+    try:
+        at = c["start_s"] + 0.4 * (c["end_s"] - c["start_s"])
+        cover.make_cover(Path(c["source"]), at, c["hook"] or c["title"] or "GTA 6", _cover_path(c["id"]),
+                         settings.font_file, tag=tag)
+    except Exception as e:  # a missing cover should never stop a render
+        log.warning("cover for #%s failed: %s", c["id"], e)
+
+
 def cmd_render(db: DB, args) -> None:
     rendered_dir = settings.output_dir / "rendered"
     if args.ids:
@@ -313,6 +327,8 @@ def cmd_render(db: DB, args) -> None:
             note = "original audio"
         print(f"rendering #{c['id']} ({kw['mode']} layout, {note}) -> {out}")
         edit.render(out_path=out, font_file=settings.font_file, **kw)
+        if not args.no_cover:
+            _make_cover(c)
         db.update_clip(c["id"], rendered_path=str(out),
                        status="approved" if c["status"] == "approved" else "rendered")
 
@@ -355,6 +371,7 @@ def cmd_compile(db: DB, args) -> None:
     out = settings.output_dir / "rendered" / f"clip_{cid:05d}.mp4"
     print(f"compiling {len(chosen)} moments ({total:.0f}s) -> {out}")
     edit.compile_segments(segments, out, settings.font_file)
+    _make_cover({**lead, "id": cid}, tag=f"TOP {len(chosen)}")
     db.update_clip(cid, rendered_path=str(out), status="rendered")
 
 
@@ -399,6 +416,8 @@ def cmd_review(db: DB, _args) -> None:
         src = db.source(c["source_id"]) or {}
         print(f"#{c['id']:<4} [{c['status']:<8}] score {score:>3}  {c['end_s'] - c['start_s']:4.1f}s  {c['rendered_path']}")
         print(f"       from: {src.get('name', '?')} ({src.get('permission', '?')})")
+        if _cover_path(c["id"]).exists():
+            print(f"       cover: {_cover_path(c['id'])}")
         print(f"       hook: {c['hook']}\n       title: {c['title']}")
         if c.get("voiceover"):
             print(f"       commentary: {c['voiceover']}")
@@ -548,6 +567,7 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--mode", choices=["auto", "stack", "crop", "blur"], default="auto",
                    help="auto picks by finding the creator's face")
     r.add_argument("--no-voice", action="store_true", help="captions only, no spoken commentary")
+    r.add_argument("--no-cover", action="store_true", help="skip the cover image")
     cp = sub.add_parser("compile")
     cp.add_argument("--min-seconds", type=float, default=65)
     cp.add_argument("--max-seconds", type=float, default=110)
@@ -626,7 +646,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_discover(db, ns(cc=args.cc))
         cmd_fetch(db, ns(ids=[], top=3, max_minutes=90))
         cmd_scan(db, ns(no_ai=args.no_ai, rescan=False, no_speech=False))
-        cmd_render(db, ns(min=None if args.no_ai else args.min, limit=10, mode="auto", no_voice=False, ids=None))
+        cmd_render(db, ns(min=None if args.no_ai else args.min, limit=10, mode="auto", no_voice=False, ids=None,
+                          no_cover=False))
         cmd_review(db, args)
 
 
