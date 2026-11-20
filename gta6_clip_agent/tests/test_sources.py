@@ -125,3 +125,43 @@ def test_cli_flow_blocks_unapproved_footage(footage, tmp_path, monkeypatch, caps
     cli.main(["sources", "enable", "1"])
     cli.main(["publish", "--dry-run", "--platforms", "youtube"])
     assert "would post" in capsys.readouterr().out
+
+
+def test_twitch_clip_must_come_from_the_approved_streamer():
+    src = _src(platform="twitch", channel_id="kaicenat", name="Kai Cenat", permission="clipping_program",
+               proof="https://contentrewards.com/c/x")
+    clip = {"extractor": "twitch:clips", "channel": "KaiCenat", "creator": "KaiCenat",
+            "uploader": "some_clipper", "uploader_id": "999"}
+    sources.authorize_download(src, clip)
+    # A clip of someone else's stream, made by a user who happens to be named like the source.
+    other = {"extractor": "twitch:clips", "channel": "OtherStreamer", "creator": "OtherStreamer",
+             "uploader": "kaicenat", "uploader_id": "kaicenat"}
+    with pytest.raises(PermissionError_):
+        sources.authorize_download(src, other)
+
+
+def test_discover_twitch_clips_stores_views(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    db = DB(tmp_path / "t.db")
+    sid = db.add_source(name="Kai Cenat", platform="twitch", channel_id="kaicenat", handle="@kaicenat",
+                        permission="clipping_program", proof="https://contentrewards.com/c/x", active=1)
+    listing = {"entries": [
+        {"id": "FunnyClipA", "title": "he crashed the jet", "url": "https://clips.twitch.tv/FunnyClipA",
+         "view_count": 250000, "duration": 31.0, "timestamp": 1795300000},
+        {"id": "FunnyClipB", "title": "cops", "view_count": 90000, "duration": 22.5},
+        None,
+    ]}
+    monkeypatch.setattr(sources.shutil, "which", lambda _n: "/usr/bin/yt-dlp")
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout=json.dumps(listing), stderr="")
+
+    monkeypatch.setattr(sources.subprocess, "run", fake_run)
+    assert sources.discover_twitch_clips(db, db.source(sid), period="24hr") == 2
+    assert "kaicenat/clips?filter=clips&range=24hr" in seen["cmd"][-1]
+    vids = db.videos()
+    assert vids[0]["external_id"] == "FunnyClipA" and vids[0]["views"] == 250000
+    assert vids[1]["url"] == "https://clips.twitch.tv/FunnyClipB"

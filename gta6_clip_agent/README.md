@@ -52,6 +52,7 @@ python -m clipagent sources list
 
 # 2. Get footage (only from approved sources)
 python -m clipagent discover --cc     # their GTA 6 uploads, plus Creative Commons videos
+                                      # for Twitch sources: their most-viewed clips (--period 24hr|7d|30d)
 python -m clipagent videos
 python -m clipagent fetch --top 3
 python -m clipagent import vod.mp4 --source 2   # a file the creator sent you

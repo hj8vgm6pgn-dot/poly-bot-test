@@ -115,14 +115,22 @@ def cmd_sources(db: DB, args) -> None:
 def cmd_discover(db: DB, args) -> None:
     total = 0
     for s in db.sources():
-        if s["platform"] != "youtube" or s["permission"] not in ("clipping_program", "direct"):
+        if s["platform"] not in ("youtube", "twitch") or s["permission"] not in ("clipping_program", "direct"):
             continue
         problem = sources.permission_problem(s)
         if problem:
             print(f"skip {s['name']}: {problem}")
             continue
-        n = sources.discover_channel(db, s)
-        print(f"{s['name']}: {n} GTA 6 videos")
+        try:
+            if s["platform"] == "twitch":
+                n = sources.discover_twitch_clips(db, s, period=args.period)
+                print(f"{s['name']}: {n} top Twitch clips ({args.period})")
+            else:
+                n = sources.discover_channel(db, s)
+                print(f"{s['name']}: {n} GTA 6 videos")
+        except (RuntimeError, ValueError) as e:
+            print(f"{s['name']}: failed ({e})")
+            continue
         total += n
     if args.cc:
         for term in settings.search_terms:
@@ -560,6 +568,8 @@ def main(argv: list[str] | None = None) -> None:
 
     d = sub.add_parser("discover")
     d.add_argument("--cc", action="store_true", help="also search Creative Commons GTA 6 videos")
+    d.add_argument("--period", choices=["24hr", "7d", "30d", "all"], default="7d",
+                   help="for Twitch sources: how far back to look for top clips")
     sub.add_parser("videos")
     f = sub.add_parser("fetch")
     f.add_argument("ids", type=int, nargs="*")
@@ -659,7 +669,7 @@ def main(argv: list[str] | None = None) -> None:
         cmd_tiktok_login(db, args)
     elif args.cmd == "run":
         cmd_trends(db, args)
-        cmd_discover(db, ns(cc=args.cc))
+        cmd_discover(db, ns(cc=args.cc, period="7d"))
         cmd_fetch(db, ns(ids=[], top=3, max_minutes=90))
         cmd_scan(db, ns(no_ai=args.no_ai, rescan=False, no_speech=False))
         cmd_render(db, ns(min=None if args.no_ai else args.min, limit=10, mode="auto", no_voice=False, ids=None,

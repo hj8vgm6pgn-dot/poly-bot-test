@@ -208,4 +208,12 @@ python -m clipagent sources add @KaiCenatLive --permission clipping_program \
 python -m clipagent sources add @KaiCenatGaming --permission clipping_program \
     --proof "<campaign link on contentrewards.com>" --tags KAICENAT \
     --name-in-headline --plain-cover --credit "Kai Cenat"
+python -m clipagent sources add kaicenat --platform twitch --permission clipping_program \
+    --proof "<campaign link on contentrewards.com>" --tags KAICENAT \
+    --name-in-headline --plain-cover --credit "Kai Cenat"
 ```
+
+The Twitch source is the quick route. `discover --period 7d` lists his most-viewed Twitch
+clips of the week, each a short moment viewers have already picked. `fetch --top 5` then
+downloads the five biggest, and `scan` and `render` turn them into your own vertical cuts.
+Check each one is from the GTA 6 marathon (18 Nov 2026 or later) before approving it.

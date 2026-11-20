@@ -187,6 +187,43 @@ def discover_creative_commons(db, query: str, days: int = 30, max_results: int =
     return n
 
 
+# --------------------------------------------------------------------------- Twitch
+def discover_twitch_clips(db, source: dict, period: str = "7d", limit: int = 40) -> int:
+    """List an approved Twitch channel's most-viewed clips from the last day/week/month.
+
+    Viewers have already picked these moments by watching them, so they are the best
+    guide to what works. Each one is a short clip of the creator's own stream. No Twitch
+    login is needed; the listing is public.
+    """
+    require(source)
+    if period not in ("24hr", "7d", "30d", "all"):
+        raise ValueError("period must be 24hr, 7d, 30d or all")
+    if not shutil.which("yt-dlp"):
+        raise RuntimeError("yt-dlp is not installed (pip install yt-dlp)")
+    login = str(source["channel_id"]).lstrip("@")
+    out = subprocess.run(
+        ["yt-dlp", "-J", "--flat-playlist", "--playlist-end", str(limit),
+         f"https://www.twitch.tv/{login}/clips?filter=clips&range={period}"],
+        capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        raise RuntimeError(f"could not list Twitch clips: {out.stderr.strip()[-300:]}")
+    n = 0
+    for e in json.loads(out.stdout).get("entries") or []:
+        if not e or not e.get("id"):
+            continue
+        ts = e.get("timestamp")
+        db.upsert_video(
+            source_id=source["id"], platform="twitch", external_id=str(e["id"]),
+            url=e.get("url") or e.get("webpage_url") or f"https://clips.twitch.tv/{e['id']}",
+            title=e.get("title") or "", license="twitch-clip", views=int(e.get("view_count") or 0),
+            published_at=dt.datetime.fromtimestamp(ts, dt.timezone.utc).isoformat() if ts else "",
+            duration_s=e.get("duration"),
+        )
+        n += 1
+    return n
+
+
 # --------------------------------------------------------------------------- download
 def _ytdlp_metadata(url: str) -> dict:
     if not shutil.which("yt-dlp"):
@@ -204,10 +241,17 @@ def authorize_download(source: dict | None, meta: dict) -> None:
     Creative Commons source only covers videos that carry the CC licence.
     """
     require(source)
-    actual = meta.get("channel_id") or meta.get("uploader_id") or ""
-    if actual != source["channel_id"]:
+    if str(meta.get("extractor", "")).lower().startswith("twitch"):
+        # On a Twitch clip the "uploader" is whoever made the clip; the stream's owner is the
+        # channel / creator. Only the owner counts.
+        owners = [meta.get("channel"), meta.get("creator"), meta.get("channel_id"), meta.get("uploader_id")
+                  if "clips" not in str(meta.get("extractor", "")).lower() else None]
+    else:
+        owners = [meta.get("channel_id") or meta.get("uploader_id")]
+    owners = {str(o).lower().lstrip("@") for o in owners if o}
+    if str(source["channel_id"]).lower().lstrip("@") not in owners:
         raise PermissionError_(
-            f"video belongs to channel '{meta.get('channel') or actual}', "
+            f"video belongs to channel '{meta.get('channel') or meta.get('channel_id') or '?'}', "
             f"not to approved source '{source['name']}'"
         )
     if source["permission"] == "creative_commons":
