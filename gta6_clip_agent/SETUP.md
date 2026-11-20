@@ -18,7 +18,7 @@ see what's connected and how close each account is to monetization.
 - [ ] **Connect YouTube**: create the channel, set up OAuth and set the `YOUTUBE_*` keys
 - [ ] **Get permission** from creators: join clipping programs and message creators (section 4)
 - [ ] Register each one with `python -m clipagent sources add ...`
-- [ ] Record a voice test and pick your `VOICE_PITCH` (section 5)
+- [ ] Record your commentary lines in your own voice (section 5)
 - [ ] Turn on monetization on each platform once eligible (below)
 - [ ] Run `python -m clipagent accounts` and confirm all three show as connected
 
@@ -158,9 +158,10 @@ one: some uploaders mark videos CC that they do not own.
    name to save it under.
 2. Record each line. On iPhone, Voice Memos works: record, then share the file to your
    computer and rename it (for example `clip_00012.m4a`). Put it in the `voice/` folder.
-3. Run `python -m clipagent voice-test voice/clip_00012.m4a --pitch -3` and listen to
-   `out/voice_test.wav`. Try values from `-2` to `-5` and put the one you like in `.env`
-   as `VOICE_PITCH`.
+3. Run `python -m clipagent voice-test voice/clip_00012.m4a` and listen to
+   `out/voice_test.wav`. By default the agent only cleans the recording up and keeps your
+   natural voice. To change the sound, add `--pitch -3` (deeper) or `--preset warm`, and
+   put the setting you like in `.env` as `VOICE_PITCH` or `VOICE_PRESET`.
 4. Run `python -m clipagent render --ids 12` to rebuild the clip with your voice.
 
 Tips: record in a quiet room, hold the phone a hand's width from your mouth, and read

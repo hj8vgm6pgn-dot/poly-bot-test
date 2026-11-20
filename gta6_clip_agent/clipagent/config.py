@@ -85,9 +85,9 @@ class Settings:
     campaign_max_s: float = float(_env("CAMPAIGN_MAX_S", "20"))
 
     # Voiceover (your channel's original commentary track)
-    # Your own recordings: voice/clip_00012.m4a is used for clip #12 and pitched by VOICE_PITCH.
+    # Your own recordings: voice/clip_00012.m4a is used for clip #12 cleaned up, and pitched by VOICE_PITCH if set.
     voice_dir: Path = field(default_factory=lambda: Path(_env("VOICE_DIR", "voice")))
-    voice_pitch: float = float(_env("VOICE_PITCH", "-3"))  # semitones; negative = deeper
+    voice_pitch: float = float(_env("VOICE_PITCH", "0"))  # semitones; 0 = natural, negative = deeper
     voice_preset: str | None = _env("VOICE_PRESET")  # a named effect; overrides VOICE_PITCH
     # Delivery: pauses longer than VOICE_MAX_PAUSE are shortened, and a slow read is sped up
     # toward VOICE_TARGET_WPM (never by more than VOICE_MAX_SPEEDUP, never slowed down).

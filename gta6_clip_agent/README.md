@@ -150,12 +150,13 @@ with the original audio lowered underneath.
 ```bash
 python -m clipagent script                       # the lines to record, and the file name for each
 # record each line on your phone or computer and save it as voice/clip_00012.m4a
-python -m clipagent voice-test voice/clip_00012.m4a --pitch -3   # hear the effect first
+python -m clipagent voice-test voice/clip_00012.m4a   # hear the cleaned-up result first
 python -m clipagent render --ids 12              # re-render that clip with your voice
 ```
 
-The agent removes background hiss, trims silence, evens out the volume and lowers
-the pitch by `VOICE_PITCH` semitones (default `-3`; try `-2` to `-5`). Or pick a named
+The agent removes background hiss, trims silence and evens out the volume, and leaves
+your voice otherwise natural. To change it, set `VOICE_PITCH` in semitones (default `0`;
+`-2` to `-5` is deeper). Or pick a named
 effect with `VOICE_PRESET`: `natural_low`, `warm`, `narrator`, `different` (same pitch,
 different tone) or `light`. Try one with `voice-test me.m4a --preset warm`. A lower pitch
 makes your voice less recognisable to people who know you, but it is not real

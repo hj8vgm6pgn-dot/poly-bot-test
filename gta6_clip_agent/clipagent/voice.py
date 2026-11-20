@@ -2,7 +2,7 @@
 
 Your own voice is the strongest "original input" a clips channel can add. Record
 the line the agent wrote (`python -m clipagent script` lists them), save it as
-voice/clip_<id>.m4a, and the agent cleans it up, lowers the pitch by VOICE_PITCH
+voice/clip_<id>.m4a, and the agent cleans it up, optionally shifts the pitch by VOICE_PITCH
 semitones and mixes it in. A recording always wins over text-to-speech.
 
 Text-to-speech providers, used only when there is no recording:
