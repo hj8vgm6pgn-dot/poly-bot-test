@@ -448,6 +448,25 @@ def cmd_publish(db: DB, args) -> None:
             db.update_clip(c["id"], status="published")
 
 
+def cmd_tiktok_login(_db: DB, args) -> None:
+    from . import tiktok_auth
+
+    try:
+        url, state = tiktok_auth.authorize_url()
+    except RuntimeError as e:
+        raise SystemExit(str(e))
+    print("1. Open this link in a browser where you are logged in to the channel's TikTok account:\n")
+    print(f"   {url}\n")
+    print("2. Approve the app. You will land on a page that shows a code.")
+    print(f"   Check that the page shows this security check value: {state}")
+    code = args.code or input("3. Paste the code here and press Enter: ")
+    try:
+        token = tiktok_auth.exchange_code(code)
+    except (RuntimeError, Exception) as e:
+        raise SystemExit(f"Sign-in failed: {e}")
+    print(f"Signed in. Granted permissions: {token.get('scope', '?')}. Run `accounts` to confirm.")
+
+
 def cmd_accounts(_db: DB, _args) -> None:
     from .accounts import all_statuses, format_status
 
@@ -460,7 +479,7 @@ def cmd_metrics(db: DB, _args) -> None:
     from .publish.youtube import video_metrics
 
     rows = db.conn.execute("SELECT platform, external_id FROM posts").fetchall()
-    tiktok_stats = {v["id"]: v for v in trends.tiktok_own_videos(50)} if settings.tiktok_access_token else {}
+    tiktok_stats = {v["id"]: v for v in trends.tiktok_own_videos(50)}
     for r in rows:
         try:
             if r["platform"] == "youtube":
@@ -551,6 +570,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--dry-run", action="store_true")
     sub.add_parser("metrics")
     sub.add_parser("accounts")
+    tl = sub.add_parser("tiktok-login", help="sign in to your TikTok account")
+    tl.add_argument("--code", help="the code from the callback page (skips the prompt)")
     run = sub.add_parser("run")
     run.add_argument("--no-ai", action="store_true")
     run.add_argument("--min", type=float, default=60)
@@ -598,6 +619,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_metrics(db, args)
     elif args.cmd == "accounts":
         cmd_accounts(db, args)
+    elif args.cmd == "tiktok-login":
+        cmd_tiktok_login(db, args)
     elif args.cmd == "run":
         cmd_trends(db, args)
         cmd_discover(db, ns(cc=args.cc))

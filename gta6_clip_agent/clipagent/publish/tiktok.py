@@ -21,8 +21,11 @@ CHUNK = 10 * 1024 * 1024
 
 
 def upload_draft(clip: dict) -> str:
-    if not settings.tiktok_access_token:
-        raise RuntimeError("TIKTOK_ACCESS_TOKEN is not configured")
+    from .. import tiktok_auth
+
+    token = tiktok_auth.access_token()
+    if not token:
+        raise RuntimeError("Not signed in to TikTok; run `python -m clipagent tiktok-login`")
     path = Path(clip["rendered_path"])
     size = path.stat().st_size
     if size <= MAX_SINGLE:
@@ -31,7 +34,7 @@ def upload_draft(clip: dict) -> str:
         chunk_size = CHUNK
         n_chunks = math.floor(size / chunk_size)  # last chunk absorbs the remainder
 
-    headers = {"Authorization": f"Bearer {settings.tiktok_access_token}",
+    headers = {"Authorization": f"Bearer {token}",
                "Content-Type": "application/json; charset=UTF-8"}
     init = requests.post(
         f"{TIKTOK}/post/publish/inbox/video/init/",

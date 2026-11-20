@@ -111,13 +111,16 @@ TIKTOK = "https://open.tiktokapis.com/v2"
 
 
 def tiktok_own_videos(max_count: int = 20) -> list[dict]:
-    if not settings.tiktok_access_token:
-        log.info("TIKTOK_ACCESS_TOKEN not set; skipping TikTok analytics")
+    from . import tiktok_auth
+
+    token = tiktok_auth.access_token()
+    if not token:
+        log.info("Not signed in to TikTok; skipping TikTok analytics")
         return []
     r = requests.post(
         f"{TIKTOK}/video/list/",
         params={"fields": "id,title,create_time,view_count,like_count,comment_count,share_count"},
-        headers={"Authorization": f"Bearer {settings.tiktok_access_token}"},
+        headers={"Authorization": f"Bearer {token}"},
         json={"max_count": max_count},
         timeout=TIMEOUT,
     )

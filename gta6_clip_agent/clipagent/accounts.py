@@ -112,10 +112,17 @@ def instagram_status() -> Status:
 # --------------------------------------------------------------------------- TikTok
 def tiktok_status() -> Status:
     st = Status("tiktok", False)
-    if not settings.tiktok_access_token:
-        st.error = "not configured (TIKTOK_ACCESS_TOKEN)"
+    from . import tiktok_auth
+
+    try:
+        token = tiktok_auth.access_token()
+    except (RuntimeError, requests.RequestException) as e:
+        st.error = f"sign-in expired or failed ({e}); run `tiktok-login` again"
         return st
-    h = {"Authorization": f"Bearer {settings.tiktok_access_token}"}
+    if not token:
+        st.error = "not signed in (set TIKTOK_CLIENT_KEY/SECRET, then run `tiktok-login`)"
+        return st
+    h = {"Authorization": f"Bearer {token}"}
     try:
         r = requests.get("https://open.tiktokapis.com/v2/user/info/",
                          params={"fields": "display_name,follower_count,video_count,likes_count"},

@@ -62,7 +62,11 @@ class Settings:
     public_video_base_url: str | None = _env("PUBLIC_VIDEO_BASE_URL")
 
     # TikTok (Display API + Content Posting API)
-    tiktok_access_token: str | None = _env("TIKTOK_ACCESS_TOKEN")
+    tiktok_client_key: str | None = _env("TIKTOK_CLIENT_KEY")
+    tiktok_client_secret: str | None = _env("TIKTOK_CLIENT_SECRET")
+    tiktok_redirect_uri: str = _env(
+        "TIKTOK_REDIRECT_URI", "https://hj8vgm6pgn-dot.github.io/poly-bot-test/callback.html")
+    tiktok_access_token: str | None = _env("TIKTOK_ACCESS_TOKEN")  # optional manual override
 
     # Trend search
     search_terms: list[str] = field(

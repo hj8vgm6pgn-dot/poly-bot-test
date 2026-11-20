@@ -46,16 +46,28 @@ Your account must pass the Partner Monetization and Content Monetization policie
 
 ## 2. TikTok
 
-1. Use your existing account or create one. Switch to a **Creator / Business account**
-   (Settings → Account).
-2. At [developers.tiktok.com](https://developers.tiktok.com), create an app and add **Login Kit**
-   and the **Content Posting API**. Request these scopes:
+1. Use your existing account or create one. Switch to a **Business account**
+   (Settings and privacy → Account).
+2. At [developers.tiktok.com](https://developers.tiktok.com), create an app (type "Other").
+   Fill in the icon, description, and the site links below, and verify the URL prefix:
+   - Web/Desktop URL: `https://hj8vgm6pgn-dot.github.io/poly-bot-test/`
+   - Terms of Service: `https://hj8vgm6pgn-dot.github.io/poly-bot-test/terms.html`
+   - Privacy Policy: `https://hj8vgm6pgn-dot.github.io/poly-bot-test/privacy.html`
+3. Add the products **Login Kit** and **Content Posting API**, and the scopes
    `user.info.basic`, `user.info.stats`, `video.list`, `video.upload`.
-3. Run the OAuth login once to get an access token and refresh token. Put the access token
-   in `.env` as `TIKTOK_ACCESS_TOKEN`. Access tokens expire after about 24h; refresh them
-   with the refresh token.
-4. Uploads go to your **TikTok inbox as drafts**. Finish each post in the app and add a
-   trending sound. To post directly from the agent, the app has to pass TikTok's audit.
+4. In Login Kit, add this **Redirect URI**:
+   `https://hj8vgm6pgn-dot.github.io/poly-bot-test/callback.html`
+5. Create a **Sandbox** (tab at the top), give it the same products, scopes and redirect URI,
+   and add your own TikTok account as a target user. The sandbox has its own client key
+   and secret.
+6. Put the sandbox **client key** and **client secret** in `.env` as `TIKTOK_CLIENT_KEY` and
+   `TIKTOK_CLIENT_SECRET`.
+7. Run `python -m clipagent tiktok-login`. Open the link it prints, approve the app, copy the
+   code from the page you land on, and paste it back. The agent renews the sign-in by itself
+   after that.
+8. Uploads go to your **TikTok inbox as drafts**. Finish each post in the app and add a
+   trending sound. Posting directly needs TikTok to approve the app in Production, which
+   requires a demo video of the tool working.
 
 **Monetization (Creator Rewards Program):** 18+, an eligible country, about **10,000 followers**
 and **100,000 views in the last 30 days**. **Only original videos longer than 1 minute earn.**

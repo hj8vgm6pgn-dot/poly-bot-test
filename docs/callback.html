@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="style.css"><title>Sign-in code - ViceOnTheIce Clips</title>
+<style>.box{border:1px solid var(--line);border-radius:10px;padding:14px;word-break:break-all;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;margin:8px 0 14px}
+button{font:inherit;font-weight:600;padding:12px 18px;border-radius:10px;border:0;background:var(--accent);color:var(--bg);cursor:pointer}</style></head><body>
+<nav><a href="./">ViceOnTheIce Clips</a><a href="privacy.html">Privacy Policy</a><a href="terms.html">Terms of Service</a></nav><main>
+<h1 id="title">Sign-in code</h1>
+<div id="ok" hidden>
+<p>TikTok approved the sign-in. Copy this code and paste it into the clip agent on your computer. It works once and expires within a few minutes.</p>
+<div class="box" id="code"></div>
+<button id="copy">Copy code</button>
+<p class="muted">Security check value: <strong id="state"></strong>. It should match the value the agent printed.</p>
+</div>
+<div id="err" hidden><p>TikTok did not approve the sign-in.</p><div class="box" id="reason"></div><p>Run <code>tiktok-login</code> again to retry.</p></div>
+<div id="none" hidden><p>This page is where TikTok sends you after you approve the clip agent. There is no code here right now. Start from <code>python -m clipagent tiktok-login</code>.</p></div>
+<p class="muted">This page does not store or send the code anywhere. It only displays it.</p>
+<script>
+const q = new URLSearchParams(location.search), $ = id => document.getElementById(id);
+if (q.get('code')) {
+  $('ok').hidden = false; $('code').textContent = q.get('code'); $('state').textContent = q.get('state') || '(none)';
+  $('copy').onclick = async () => { try { await navigator.clipboard.writeText(q.get('code')); $('copy').textContent = 'Copied'; } catch (e) { $('copy').textContent = 'Select the code and copy it'; } };
+} else if (q.get('error')) {
+  $('err').hidden = false; $('title').textContent = 'Sign-in not completed';
+  $('reason').textContent = (q.get('error_description') || q.get('error'));
+} else { $('none').hidden = false; $('title').textContent = 'Sign-in page'; }
+</script></main></body></html>
