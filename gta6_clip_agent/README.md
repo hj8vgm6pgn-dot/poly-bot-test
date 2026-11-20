@@ -23,6 +23,9 @@ pip install -r requirements.txt     # also needs ffmpeg on PATH
 cp .env.example .env                # fill in the keys you have; every platform is optional
 ```
 
+**First-time setup:** follow [SETUP.md](SETUP.md) to create and connect the
+Instagram, TikTok and YouTube accounts and turn on monetization.
+
 Drop your recordings (OBS, console capture, etc.) into `footage/`.
 
 ## Usage
@@ -36,6 +39,8 @@ python -m clipagent approve 3 7       # or: reject 4
 python -m clipagent publish --dry-run
 python -m clipagent publish --platforms youtube,tiktok --yt-privacy unlisted
 python -m clipagent metrics           # refresh views/likes; best posts steer future scoring
+python -m clipagent compile           # 65-110s cut of top moments (TikTok only pays on 60s+)
+python -m clipagent accounts          # connection check + monetization progress per platform
 
 python -m clipagent run               # trends + scan + render + review in one go
 ```

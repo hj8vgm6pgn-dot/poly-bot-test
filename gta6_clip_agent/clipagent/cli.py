@@ -7,6 +7,8 @@
     python -m clipagent approve 3 5 7       # mark clips as approved (or: reject 4)
     python -m clipagent publish [--platforms youtube,tiktok,instagram] [--dry-run]
     python -m clipagent metrics             # refresh views/likes for posted clips
+    python -m clipagent compile             # stitch top moments into a 60s+ cut (TikTok rewards)
+    python -m clipagent accounts            # check connections + monetization progress
     python -m clipagent run                 # trends + scan + render in one go
 
 Nothing is posted without an explicit `approve` first.
@@ -144,6 +146,45 @@ def cmd_publish(db: DB, args) -> None:
             db.update_clip(c["id"], status="published")
 
 
+def cmd_compile(db: DB, args) -> None:
+    pool = [c for c in db.clips("candidate") + db.clips("rendered")
+            if c["source"] != "compilation" and (args.min is None or (c["ai_score"] or 0) >= args.min)]
+    pool.sort(key=lambda c: (c["ai_score"] or 0, c["signal_score"] or 0), reverse=True)
+    chosen, total = [], 0.0
+    for c in pool:
+        dur = c["end_s"] - c["start_s"]
+        if total + dur > args.max_seconds:
+            continue
+        chosen.append(c)
+        total += dur
+        if total >= args.min_seconds:
+            break
+    if total < args.min_seconds:
+        print(f"Only {total:.0f}s of usable moments (need {args.min_seconds:.0f}s). Scan more footage.")
+        return
+    # Best moment first: it carries the hook and decides whether people keep watching.
+    segments = [(Path(c["source"]), c["start_s"], c["end_s"], analyze.has_audio(Path(c["source"])))
+                for c in chosen]
+    lead = chosen[0]
+    cid = db.add_clip(source="compilation", start_s=0.0, end_s=total,
+                      signal_score=sum(c["signal_score"] or 0 for c in chosen) / len(chosen),
+                      ai_score=lead["ai_score"], hook=lead["hook"], title=lead["title"],
+                      caption=lead["caption"], hashtags=lead["hashtags"],
+                      reasoning="compilation of clips " + ", ".join(f"#{c['id']}" for c in chosen))
+    out = settings.output_dir / "rendered" / f"clip_{cid:05d}.mp4"
+    print(f"compiling {len(chosen)} moments ({total:.0f}s) -> {out}")
+    edit.compile_segments(segments, lead["hook"] or "", out, settings.font_file, mode=args.mode)
+    db.update_clip(cid, rendered_path=str(out), status="rendered")
+
+
+def cmd_accounts(_db: DB, _args) -> None:
+    from .accounts import all_statuses, format_status
+
+    for st in all_statuses():
+        print(format_status(st))
+        print()
+
+
 def cmd_metrics(db: DB, _args) -> None:
     from .publish.youtube import video_metrics
 
@@ -189,6 +230,12 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--yt-privacy", default="private", choices=["private", "unlisted", "public"])
     p.add_argument("--dry-run", action="store_true")
     sub.add_parser("metrics")
+    sub.add_parser("accounts")
+    cp = sub.add_parser("compile")
+    cp.add_argument("--min-seconds", type=float, default=65)
+    cp.add_argument("--max-seconds", type=float, default=110)
+    cp.add_argument("--min", type=float, default=None, help="minimum AI score of included moments")
+    cp.add_argument("--mode", choices=["blur", "crop"], default="blur")
     run = sub.add_parser("run")
     run.add_argument("--no-ai", action="store_true")
     run.add_argument("--min", type=float, default=60)
@@ -214,6 +261,10 @@ def main(argv: list[str] | None = None) -> None:
         cmd_publish(db, args)
     elif args.cmd == "metrics":
         cmd_metrics(db, args)
+    elif args.cmd == "accounts":
+        cmd_accounts(db, args)
+    elif args.cmd == "compile":
+        cmd_compile(db, args)
     elif args.cmd == "run":
         cmd_trends(db, args)
         cmd_scan(db, argparse.Namespace(no_ai=args.no_ai, rescan=False))

@@ -89,7 +89,7 @@ def render(
         cmd += [
             "-map", "0:a:0",
             "-af", f"loudnorm=I=-14:TP=-1.5:LRA=11,afade=t=out:st={max(0, duration - 0.3):.2f}:d=0.3",
-            "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
+            "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
         ]
     cmd += [
         "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-r", "30",
@@ -97,4 +97,45 @@ def render(
         str(out_path),
     ]
     subprocess.run(cmd, check=True)
+    return out_path
+
+
+def compile_segments(
+    segments: list[tuple[Path, float, float, bool]],
+    hook: str,
+    out_path: Path,
+    font_file: str,
+    mode: str = "blur",
+) -> Path:
+    """Render several (source, start, end, has_audio) moments and join them into one video.
+
+    Used for 60s+ cuts (TikTok Creator Rewards only pays on videos longer than a minute).
+    The hook text is shown only on the first segment.
+    """
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    parts_dir = out_path.parent / f".{out_path.stem}_parts"
+    parts_dir.mkdir(exist_ok=True)
+    parts = []
+    for i, (src, start, end, audio) in enumerate(segments):
+        part = parts_dir / f"p{i:02d}.mp4"
+        render(src, start, end, hook if i == 0 else "", part, font_file, mode=mode, has_audio=audio)
+        if not audio:  # concat needs matching streams; add silence
+            silent = parts_dir / f"p{i:02d}_a.mp4"
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-i", str(part), "-f", "lavfi",
+                 "-i", "anullsrc=r=48000:cl=stereo", "-shortest", "-c:v", "copy",
+                 "-c:a", "aac", "-b:a", "160k", str(silent)], check=True)
+            part = silent
+        parts.append(part)
+    listing = parts_dir / "list.txt"
+    listing.write_text("".join(f"file '{p.resolve()}'\n" for p in parts))
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing),
+         "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+         "-movflags", "+faststart", str(out_path)],
+        check=True,
+    )
+    for p in parts_dir.iterdir():
+        p.unlink()
+    parts_dir.rmdir()
     return out_path

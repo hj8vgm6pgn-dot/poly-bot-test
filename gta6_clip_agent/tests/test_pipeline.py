@@ -112,3 +112,23 @@ def test_judge_parses_structured_output(video, tmp_path):
     assert j.virality_score == 82 and j.category == "chase"
     assert calls["output_config"]["format"]["type"] == "json_schema"
     assert sum(1 for b in calls["messages"][0]["content"] if b["type"] == "image") == 2
+
+
+def test_compile_over_one_minute(video, tmp_path):
+    segs = [(video, 0, 25, True), (video, 28, 50, True), (video, 40, 58, True)]
+    out = edit.compile_segments(segs, "Three wild moments", tmp_path / "comp.mp4", FONT)
+    dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                                "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout)
+    assert dur > 60
+
+
+def test_accounts_report_unconfigured(monkeypatch):
+    from clipagent import accounts
+    from clipagent.config import settings
+
+    for k in ("youtube_client_id", "youtube_refresh_token", "ig_user_id", "ig_access_token",
+              "tiktok_access_token"):
+        monkeypatch.setattr(settings, k, None)
+    for st in accounts.all_statuses():
+        assert not st.connected and st.error
+        assert "NOT CONNECTED" in accounts.format_status(st)
