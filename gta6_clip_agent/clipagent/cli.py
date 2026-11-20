@@ -34,13 +34,27 @@ import logging
 import tempfile
 from pathlib import Path
 
-from . import analyze, edit, sources, trends, voice
+from . import analyze, edit, layout, sources, transcribe, trends, voice
 from .config import settings
 from .db import DB
 from .sources import PermissionError_
 
 log = logging.getLogger("clipagent")
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
+
+
+def _style(src: dict) -> str:
+    """campaign = original audio + subtitles; commentary = our captions + voiceover."""
+    return src.get("style") or ("campaign" if src["permission"] == "clipping_program" else "commentary")
+
+
+def _transcript(video: dict | None, no_speech: bool = False, cached_only: bool = False) -> list | None:
+    if no_speech or not video or not video.get("local_path"):
+        return None
+    cache = settings.output_dir / "transcripts" / f"video_{video['id']}.json"
+    if cached_only:  # rendering reuses what the scan produced; it never starts a transcription
+        return json.loads(cache.read_text()) if cache.exists() else None
+    return transcribe.transcribe(Path(video["local_path"]), cache)
 
 
 # --------------------------------------------------------------------------- sources
@@ -53,7 +67,7 @@ def cmd_sources(db: DB, args) -> None:
             problem = sources.permission_problem(s)
             views, payout = db.source_earnings(s["id"])
             state = "OK" if not problem else f"BLOCKED: {problem}"
-            print(f"#{s['id']:<3} {s['name']} ({s['platform']}, {s['permission']})  {state}")
+            print(f"#{s['id']:<3} {s['name']} ({s['platform']}, {s['permission']}, {_style(s)} style)  {state}")
             print(f"      credit: {s['credit']}  proof: {s['proof'] or '-'}  expires: {s['expires_at'] or '-'}")
             if s["payout_per_1k"]:
                 print(f"      payout: {s['payout_per_1k']}/1k views  posted views: {views:,}  est. earned: {payout:.2f}")
@@ -88,6 +102,7 @@ def cmd_sources(db: DB, args) -> None:
         permission=args.permission, proof=args.proof or "", credit=args.credit or handle or info["name"],
         required_tags=json.dumps([t.strip().lstrip("#") for t in (args.tags or "").split(",") if t.strip()]),
         rules=args.rules or "", payout_per_1k=args.payout, expires_at=args.expires, active=1,
+        style=args.style,
     )
     print(f"Approved source #{sid}: {info['name']} ({args.permission})")
 
@@ -190,18 +205,29 @@ def cmd_scan(db: DB, args) -> None:
         print(f"scanning #{v['id']} {f} ({src['name']}) ...")
         required = json.loads(src.get("required_tags") or "[]")
         credit = sources.credit_line(src, v)
-        cands = analyze.find_candidates(
-            f, settings.min_clip_s, settings.max_clip_s, settings.candidates_per_video
-        )
+        style = _style(src)
+        lo, hi = ((settings.campaign_min_s, settings.campaign_max_s) if style == "campaign"
+                  else (settings.min_clip_s, settings.max_clip_s))
+        words = _transcript(v, args.no_speech)
+        speech = None
+        if words:
+            n = max(1, int(analyze.probe_duration(f) * analyze.FPS))
+            speech = transcribe.speech_rate(words, n, analyze.FPS)
+        cands = analyze.find_candidates(f, lo, hi, settings.candidates_per_video, speech=speech)
         for c in cands:
+            if words:
+                c.start_s, c.end_s = transcribe.snap_to_speech(words, c.start_s, c.end_s)
             row = dict(source=str(f), start_s=c.start_s, end_s=c.end_s, signal_score=c.score,
                        source_id=src["id"], video_id=v["id"], credit=credit,
                        hook="", title="", caption="", hashtags="[]", voiceover="")
             if judge:
                 with tempfile.TemporaryDirectory() as tmp:
                     frames = analyze.extract_frames(f, c.start_s, c.end_s, 8, Path(tmp))
-                    j = judge.judge(frames, c.duration, c.score, context,
-                                    source_note=f"creator {src['name']}, video \"{v['title']}\"")
+                    j = judge.judge(
+                        frames, c.duration, c.score, context,
+                        source_note=f"creator {src['name']}, video \"{v['title']}\"",
+                        transcript=transcribe.text_in(words, c.start_s, c.end_s, with_times=True) if words else "",
+                        style=style)
                 if j is None:
                     print(f"  {c.start_s:7.1f}-{c.end_s:7.1f}s  (model gave no usable verdict)")
                     continue
@@ -209,32 +235,49 @@ def cmd_scan(db: DB, args) -> None:
                 end = c.end_s - max(0.0, j.trim_end_offset_s)
                 if end - start < 6:  # ignore trims that would gut the clip
                     start, end = c.start_s, c.end_s
+                if words:
+                    start, end = transcribe.snap_to_speech(words, start, end, max_shift=1.0)
                 tags = list(dict.fromkeys([h.lstrip("#") for h in j.hashtags] + required))
                 row.update(start_s=start, end_s=end, ai_score=j.virality_score,
                            hook=j.hook_text, title=j.title, caption=j.caption,
-                           hashtags=json.dumps(tags), voiceover=j.commentary,
+                           hashtags=json.dumps(tags),
+                           voiceover="" if style == "campaign" else j.commentary,
                            reasoning=f"[{j.category}] {j.reasoning}",
                            status="candidate" if j.keep else "rejected")
                 print(f"  {start:7.1f}-{end:7.1f}s  score {j.virality_score:3d}  {j.category:<12} {j.hook_text}")
             else:
                 tags = list(dict.fromkeys(["gta6", "gtavi", "gaming"] + required))
-                row.update(ai_score=None, hook="Wait for it...", title="GTA 6 moment #Shorts",
+                row.update(ai_score=None, hook=f"{src['name']} on GTA 6" if style == "campaign" else "Wait for it...",
+                           title="GTA 6 moment #Shorts",
                            caption="GTA 6 is wild", hashtags=json.dumps(tags))
                 print(f"  {c.start_s:7.1f}-{c.end_s:7.1f}s  signal {c.score:5.2f}")
             db.add_clip(**row)
         db.update_video(v["id"], status="scanned")
 
 
-def _render_kwargs(db: DB, c: dict, vo_dir: Path, with_voice: bool = True) -> dict:
+def _render_kwargs(db: DB, c: dict, vo_dir: Path, with_voice: bool = True, mode: str = "auto") -> dict:
     """Everything `edit.render` needs for one clip, after re-checking the permission."""
     src = db.source(c["source_id"])
     sources.require(src)
+    path = Path(c["source"])
+    campaign = _style(src) == "campaign"
+
+    # Subtitles of the creator's own words (campaign style keeps their audio front and centre).
+    words = _transcript(db.video(c["video_id"]), cached_only=True) if c.get("video_id") else None
+    captions = transcribe.caption_cards(words, c["start_s"], c["end_s"]) if words else None
+
+    commentary = "" if campaign else (c.get("voiceover") or "")
     vo = None
-    if with_voice and c.get("voiceover"):
-        vo = voice.synthesize(c["voiceover"], vo_dir / f"vo_{c['id']:05d}")
-    return dict(source=Path(c["source"]), start_s=c["start_s"], end_s=c["end_s"], hook=c["hook"] or "",
-                has_audio=analyze.has_audio(Path(c["source"])), credit=sources.watermark(src),
-                commentary=c.get("voiceover") or "", voiceover=vo)
+    if with_voice and commentary:
+        vo = voice.synthesize(commentary, vo_dir / f"vo_{c['id']:05d}")
+
+    face = layout.detect_face(path, c["start_s"], c["end_s"]) if mode in ("auto", "stack", "crop") else None
+    chosen = layout.choose(face) if mode == "auto" else mode
+    return dict(source=path, start_s=c["start_s"], end_s=c["end_s"], hook=c["hook"] or "",
+                has_audio=analyze.has_audio(path), credit=sources.watermark(src),
+                commentary=commentary, voiceover=vo, mode=chosen, face=face,
+                # Our commentary captions and the creator's subtitles share the lower third.
+                captions=None if commentary else captions)
 
 
 def cmd_render(db: DB, args) -> None:
@@ -251,12 +294,13 @@ def cmd_render(db: DB, args) -> None:
     for c in cands:
         out = rendered_dir / f"clip_{c['id']:05d}.mp4"
         try:
-            kw = _render_kwargs(db, c, settings.output_dir / "voice", with_voice=not args.no_voice)
+            kw = _render_kwargs(db, c, settings.output_dir / "voice", with_voice=not args.no_voice,
+                                mode=args.mode)
         except PermissionError_ as e:
             print(f"#{c['id']} BLOCKED: {e}")
             continue
-        print(f"rendering #{c['id']} -> {out}")
-        edit.render(out_path=out, font_file=settings.font_file, mode=args.mode, **kw)
+        print(f"rendering #{c['id']} ({kw['mode']} layout) -> {out}")
+        edit.render(out_path=out, font_file=settings.font_file, **kw)
         db.update_clip(c["id"], rendered_path=str(out), status="rendered")
 
 
@@ -281,8 +325,9 @@ def cmd_compile(db: DB, args) -> None:
     lead = chosen[0]
     segments = []
     for i, c in enumerate(chosen):
-        kw = _render_kwargs(db, c, settings.output_dir / "voice", with_voice=not args.no_voice)
-        if i:
+        kw = _render_kwargs(db, c, settings.output_dir / "voice", with_voice=not args.no_voice,
+                            mode=args.mode)
+        if i and kw["mode"] != "stack":  # the stacked layout keeps its own headline per segment
             kw["hook"] = ""
         segments.append(kw)
     credits = list(dict.fromkeys(c["credit"] for c in chosen if c.get("credit")))
@@ -295,7 +340,7 @@ def cmd_compile(db: DB, args) -> None:
                       reasoning="compilation of clips " + ", ".join(f"#{c['id']}" for c in chosen))
     out = settings.output_dir / "rendered" / f"clip_{cid:05d}.mp4"
     print(f"compiling {len(chosen)} moments ({total:.0f}s) -> {out}")
-    edit.compile_segments(segments, out, settings.font_file, mode=args.mode)
+    edit.compile_segments(segments, out, settings.font_file)
     db.update_clip(cid, rendered_path=str(out), status="rendered")
 
 
@@ -408,6 +453,9 @@ def main(argv: list[str] | None = None) -> None:
     so.add_argument("--rules", help="campaign rules to remember")
     so.add_argument("--payout", type=float, help="clipping-program payout per 1,000 views")
     so.add_argument("--expires", help="date the permission ends, YYYY-MM-DD")
+    so.add_argument("--style", choices=["campaign", "commentary"],
+                    help="campaign: original audio + subtitles (default for clipping programs); "
+                         "commentary: your captions + voiceover")
 
     d = sub.add_parser("discover")
     d.add_argument("--cc", action="store_true", help="also search Creative Commons GTA 6 videos")
@@ -426,16 +474,18 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("scan")
     s.add_argument("--no-ai", action="store_true", help="signal analysis only, no Claude calls")
     s.add_argument("--rescan", action="store_true", help="re-scan videos already scanned")
+    s.add_argument("--no-speech", action="store_true", help="skip speech-to-text")
     r = sub.add_parser("render")
     r.add_argument("--min", type=float, default=None, help="minimum AI score to render")
     r.add_argument("--limit", type=int, default=10)
-    r.add_argument("--mode", choices=["blur", "crop"], default="blur")
+    r.add_argument("--mode", choices=["auto", "stack", "crop", "blur"], default="auto",
+                   help="auto picks by finding the creator's face")
     r.add_argument("--no-voice", action="store_true", help="captions only, no spoken commentary")
     cp = sub.add_parser("compile")
     cp.add_argument("--min-seconds", type=float, default=65)
     cp.add_argument("--max-seconds", type=float, default=110)
     cp.add_argument("--min", type=float, default=None, help="minimum AI score of included moments")
-    cp.add_argument("--mode", choices=["blur", "crop"], default="blur")
+    cp.add_argument("--mode", choices=["auto", "stack", "crop", "blur"], default="auto")
     cp.add_argument("--no-voice", action="store_true")
     sub.add_parser("review")
     a = sub.add_parser("approve")
@@ -495,8 +545,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_trends(db, args)
         cmd_discover(db, ns(cc=args.cc))
         cmd_fetch(db, ns(ids=[], top=3, max_minutes=90))
-        cmd_scan(db, ns(no_ai=args.no_ai, rescan=False))
-        cmd_render(db, ns(min=None if args.no_ai else args.min, limit=10, mode="blur", no_voice=False))
+        cmd_scan(db, ns(no_ai=args.no_ai, rescan=False, no_speech=False))
+        cmd_render(db, ns(min=None if args.no_ai else args.min, limit=10, mode="auto", no_voice=False))
         cmd_review(db, args)
 
 

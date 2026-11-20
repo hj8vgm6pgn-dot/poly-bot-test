@@ -117,7 +117,7 @@ def _smooth(x: np.ndarray, seconds: float) -> np.ndarray:
     return np.convolve(x, np.ones(k) / k, mode="same")
 
 
-def excitement_curve(path: Path) -> np.ndarray:
+def excitement_curve(path: Path, speech: np.ndarray | None = None) -> np.ndarray:
     duration = probe_duration(path)
     n = max(1, int(duration * FPS))
     loud, onset = audio_energy(path, n)
@@ -129,6 +129,9 @@ def excitement_curve(path: Path) -> np.ndarray:
         + 0.30 * _z(_smooth(mot, 1.0))
         + 0.05 * _z(_smooth(cuts, 2.0))
     )
+    if speech is not None and speech.any():
+        # Reward stretches where the creator is talking (reactions, commentary).
+        curve = 0.7 * curve + 0.3 * _z(_smooth(_fit(speech, n), 2.0))
     return curve
 
 
@@ -138,8 +141,9 @@ def find_candidates(
     max_s: float = 35,
     top_k: int = 6,
     lengths: tuple[float, ...] | None = None,
+    speech: np.ndarray | None = None,
 ) -> list[Candidate]:
-    curve = excitement_curve(path)
+    curve = excitement_curve(path, speech)
     n = len(curve)
     total_s = n / FPS
     if total_s <= min_s:

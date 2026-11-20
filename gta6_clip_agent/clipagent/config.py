@@ -60,6 +60,12 @@ class Settings:
         default_factory=lambda: (_env("SOURCE_KEYWORDS", "gta 6,gta vi,gta6,grand theft auto vi") or "").split(",")
     )
 
+    # Speech-to-text (subtitles + picking moments by what is said)
+    whisper_model: str = _env("WHISPER_MODEL", "small")
+    # Campaign-style clips: short, original audio, subtitles
+    campaign_min_s: float = float(_env("CAMPAIGN_MIN_S", "10"))
+    campaign_max_s: float = float(_env("CAMPAIGN_MAX_S", "20"))
+
     # Voiceover (your channel's original commentary track)
     tts_provider: str = _env("TTS_PROVIDER", "auto")  # auto | elevenlabs | piper | espeak | none
     elevenlabs_api_key: str | None = _env("ELEVENLABS_API_KEY")

@@ -38,7 +38,14 @@ Write packaging in the voice of gaming TikTok: punchy and curiosity-driven. Rule
 - Never imply the channel recorded the footage; the creator is credited separately, so do not \
   add the credit yourself.
 - Hook text is burned on screen: keep it under 45 characters.
-- The commentary is the channel's own original contribution. Write one or two spoken sentences \
+- When a transcript is given, pick moments that make sense on their own: complete sentences and \
+  a clear payoff. Set the trims so the clip starts at the beginning of a sentence and ends just \
+  after the payoff line. Prefer moments where the creator is talking or reacting over stretches \
+  where a trailer or gameplay simply plays with nobody speaking.
+- In "campaign" style the clip keeps the creator's original audio with subtitles and no \
+  voiceover: the headline (hook text) should say who the creator is and what happens, e.g. \
+  "KAI REACTS TO THE MAP SIZE". Leave commentary as an empty string.
+- In "commentary" style, the commentary is the channel's own original contribution. Write one or two spoken sentences \
   (max 28 words) that add something: context, a reaction, a detail viewers would miss, or a \
   question that invites comments. Do not just describe what is visibly happening."""
 
@@ -51,7 +58,8 @@ class ClipJudgement(BaseModel):
     title: str = Field(description="YouTube Shorts title, <=90 chars")
     caption: str = Field(description="TikTok/Instagram caption, 1-2 sentences, may end with a question")
     hashtags: list[str] = Field(description="5-10 hashtags without the # symbol")
-    commentary: str = Field(description="1-2 spoken sentences of original commentary, <=28 words")
+    commentary: str = Field(description="1-2 spoken sentences of original commentary, <=28 words; "
+                                        "empty string in campaign style")
     trim_start_offset_s: float = Field(description="Seconds to trim from the start of the window (>=0)")
     trim_end_offset_s: float = Field(description="Seconds to trim from the end of the window (>=0)")
     reasoning: str = Field(description="One or two sentences explaining the score")
@@ -93,6 +101,8 @@ class Judge:
         signal_score: float,
         context: str,
         source_note: str = "",
+        transcript: str = "",
+        style: str = "commentary",
     ) -> ClipJudgement | None:
         content: list[dict] = [
             # Context first and cached: it is identical for every candidate in a run.
@@ -106,6 +116,9 @@ class Judge:
                 f"Audio/motion excitement score from signal analysis: {signal_score:.2f} "
                 "(roughly -1 = calm, 0 = average, 2+ = very intense). "
                 + (f"Footage source: {source_note}. " if source_note else "")
+                + f"Clip style: {style}. "
+                + (f"\n\nWhat is said in this window (offsets from its start):\n{transcript}\n\n"
+                   if transcript else "No transcript is available for this window. ")
                 + "Judge this clip."
             ),
         })

@@ -77,9 +77,29 @@ def build_filter(
     credit: str = "",
     commentary: str = "",
     commentary_s: float = 0.0,
+    face: tuple[float, float, float, float] | None = None,
+    subtitles: Path | None = None,
 ) -> str:
-    if mode == "crop":
-        video = f"[0:v]scale=-2:{H},crop={W}:{H},setsar=1[base]"
+    half = H // 2
+    if mode == "stack" and face:
+        # Top: a 9:8 window around the creator's face. Bottom: the scene, centre-cropped to 9:8.
+        fx, fy, fw, fh = face
+        cw = min(1.0, max(fw * 3.2, 0.3))                       # fraction of frame width
+        cx = min(max(fx + fw / 2 - cw / 2, 0.0), 1.0 - cw)
+        ccy = fy + fh / 2
+        video = (
+            f"[0:v]split=2[facesrc][scenesrc];"
+            f"[facesrc]crop=w='min(iw*{cw:.4f},ih*9/8)':h='min(iw*{cw:.4f},ih*9/8)*8/9':"
+            f"x='min(max(iw*{cx:.4f},0),iw-ow)':y='min(max(ih*{ccy:.4f}-oh/2,0),ih-oh)',"
+            f"scale={W}:{half},setsar=1[top];"
+            f"[scenesrc]crop=w='min(iw,ih*9/8)':h='min(ih,iw*8/9)',scale={W}:{half},setsar=1[bot];"
+            f"[top][bot]vstack=inputs=2[base]"
+        )
+    elif mode == "crop":
+        # Centre the 9:16 window on the creator's face when we know where it is.
+        cx = (face[0] + face[2] / 2) if face else 0.5
+        video = (f"[0:v]scale=-2:{H},crop={W}:{H}:"
+                 f"x='min(max(iw*{cx:.4f}-{W}/2,0),iw-{W})':y=0,setsar=1[base]")
     else:
         video = (
             f"[0:v]split=2[bgsrc][fgsrc];"
@@ -91,21 +111,39 @@ def build_filter(
     chain, n = "[base]", 0
     filters = [video]
 
-    def draw(text: str, size: int, y: str, enable: str | None, alpha: float = 1.0, border: int = 6) -> None:
+    def draw(text: str, size: int, y: str, enable: str | None, alpha: float = 1.0, border: int = 6,
+             box: bool = False) -> None:
         nonlocal chain, n
         out = f"[t{n}]"
         n += 1
         en = f":enable='{enable}'" if enable else ""
+        style = (":box=1:boxcolor=black@0.82:boxborderw=20" if box
+                 else f":borderw={border}:bordercolor=black@{alpha}")
         filters.append(
             f"{chain}drawtext=fontfile='{font_file}':text='{_escape_drawtext(text)}':"
-            f"fontsize={size}:fontcolor=white@{alpha}:borderw={border}:bordercolor=black@{alpha}:"
+            f"fontsize={size}:fontcolor=white@{alpha}{style}:"
             f"x=(w-text_w)/2:y={y}{en}{out}"
         )
         chain = out
 
-    hook_end = min(3.5, duration)
-    for i, line in enumerate(_wrap(hook, width=18)):
-        draw(line, 84, str(260 + i * 105), f"between(t,0,{hook_end:.2f})")
+    if mode == "stack" and face:
+        # Headline banner across the seam, kept on screen for the whole clip.
+        lines = _wrap(hook.upper(), width=24, max_lines=2)
+        y0 = half - (len(lines) * 84) // 2
+        for i, line in enumerate(lines):
+            draw(line, 52, str(y0 + i * 84), None, box=True)
+    else:
+        hook_end = min(3.5, duration)
+        for i, line in enumerate(_wrap(hook, width=18)):
+            draw(line, 84, str(260 + i * 105), f"between(t,0,{hook_end:.2f})")
+
+    if subtitles:
+        esc = str(subtitles).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+        fonts = str(Path(font_file).parent).replace(":", "\\:")
+        out = f"[t{n}]"
+        n += 1
+        filters.append(f"{chain}ass=filename='{esc}':fontsdir='{fonts}'{out}")
+        chain = out
 
     if commentary:
         span = min(commentary_s or max(3.0, len(commentary) / 14), max(1.0, duration - VO_START - 0.3))
@@ -135,11 +173,22 @@ def render(
     credit: str = "",
     commentary: str = "",
     voiceover: Path | None = None,
+    face: tuple[float, float, float, float] | None = None,
+    captions: list[tuple[float, float, str]] | None = None,
 ) -> Path:
+    """``mode``: blur | crop | stack. ``captions``: (start, end, text) cards of the creator's speech."""
+    from .transcribe import write_ass
+
     duration = end_s - start_s
     out_path.parent.mkdir(parents=True, exist_ok=True)
     vo_s = _duration(voiceover) if voiceover else 0.0
-    vf = build_filter(hook, duration, font_file, mode, credit, commentary, vo_s)
+    if mode == "stack" and not face:
+        mode = "blur"
+    ass = None
+    if captions:
+        # Below the banner in the stacked layout, lower third otherwise.
+        ass = write_ass(captions, out_path.with_suffix(".ass"), y=1090 if mode == "stack" else 1330)
+    vf = build_filter(hook, duration, font_file, mode, credit, commentary, vo_s, face, ass)
 
     cmd = ["ffmpeg", "-v", "error", "-y",
            "-ss", f"{start_s:.2f}", "-t", f"{duration:.2f}", "-i", str(source)]
@@ -168,6 +217,8 @@ def render(
         str(out_path),
     ]
     subprocess.run(cmd, check=True)
+    if ass:
+        ass.unlink(missing_ok=True)
     return out_path
 
 
@@ -175,7 +226,6 @@ def compile_segments(
     segments: list[dict],
     out_path: Path,
     font_file: str,
-    mode: str = "blur",
 ) -> Path:
     """Render several moments and join them into one video.
 
@@ -190,7 +240,7 @@ def compile_segments(
     parts = []
     for i, seg in enumerate(segments):
         part = parts_dir / f"p{i:02d}.mp4"
-        render(out_path=part, font_file=font_file, mode=mode, **seg)
+        render(out_path=part, font_file=font_file, **seg)
         if not (seg.get("has_audio", True) or seg.get("voiceover")):  # concat needs matching streams
             silent = parts_dir / f"p{i:02d}_a.mp4"
             subprocess.run(

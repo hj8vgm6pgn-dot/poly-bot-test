@@ -47,8 +47,8 @@ python -m clipagent import vod.mp4 --source 2   # a file the creator sent you
 
 # 3. Make clips
 python -m clipagent trends
-python -m clipagent scan              # add --no-ai to skip Claude
-python -m clipagent render --min 65
+python -m clipagent scan              # add --no-ai to skip Claude, --no-speech to skip subtitles
+python -m clipagent render --min 65   # layout picked automatically from the creator's face
 python -m clipagent compile           # 65-110s cut (TikTok only pays on 60s+)
 python -m clipagent review
 python -m clipagent approve 3 7       # or: reject 4
@@ -84,6 +84,36 @@ download, scan, render and publish:
 
 Creative Commons has a known weakness: some uploaders mark videos CC that they
 do not own. Look at those before approving the clips.
+
+## Clip styles
+
+Each source has a style, set with `--style` when you add it:
+
+| Style | Audio | On screen | Length | Default for |
+|---|---|---|---|---|
+| `campaign` | The creator's original audio | Headline banner, subtitles of what they say, credit | 10–20 s | Clipping programs |
+| `commentary` | Original audio lowered under your voiceover | Hook, your commentary captions, credit | 12–35 s | Direct permission, Creative Commons |
+
+Campaign style is what clipping programs pay for: the creator's own voice, untouched.
+Commentary style adds more of your own input, which helps with platform monetization.
+
+## Speech and layout
+
+- **Speech-to-text** (`clipagent/transcribe.py`) runs locally with faster-whisper. The
+  transcript is used three ways: talking-heavy stretches score higher, Claude reads what is
+  said in each candidate, and clip edges snap to pauses so nobody is cut off mid-sentence.
+  It also provides the word-timed subtitles.
+- **Layout** (`clipagent/layout.py`) looks for the creator's face in each clip:
+  - a small face-cam gives the **stacked** layout (creator on top, scene below, headline
+    banner across the middle),
+  - a creator who fills the frame gives a 9:16 **crop** centred on their face,
+  - no steady face gives the full frame over a **blurred** background.
+
+  Override with `render --mode stack|crop|blur`.
+
+Reaction videos have two owners: the creator owns the reaction, the game publisher owns the
+trailer on screen. The creator's permission covers only their part, so the agent favours
+moments where the creator is talking over stretches of raw trailer.
 
 ## Commentary and voiceover
 

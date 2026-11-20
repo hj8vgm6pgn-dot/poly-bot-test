@@ -67,6 +67,9 @@ class DB:
                          ("credit", "TEXT"), ("voiceover", "TEXT")):
             if col not in have:
                 self.conn.execute(f"ALTER TABLE clips ADD COLUMN {col} {typ}")
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(sources)")}
+        if "style" not in have:  # campaign | commentary
+            self.conn.execute("ALTER TABLE sources ADD COLUMN style TEXT")
         self.conn.commit()
 
     @contextmanager

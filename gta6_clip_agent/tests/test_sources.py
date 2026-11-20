@@ -100,13 +100,13 @@ def test_cli_flow_blocks_unapproved_footage(footage, tmp_path, monkeypatch, caps
     # Stray footage with no source is ignored by scan.
     stray = settings.footage_dir / "random_download.mp4"
     stray.write_bytes(footage.read_bytes())
-    cli.main(["scan", "--no-ai"])
+    cli.main(["scan", "--no-ai", "--no-speech"])
     assert "not linked to an approved source" in capsys.readouterr().out
     db = DB(settings.db_path)
     assert db.clips() == []
 
     cli.main(["import", str(footage), "--source", "1"])
-    cli.main(["scan", "--no-ai"])
+    cli.main(["scan", "--no-ai", "--no-speech"])
     clip = db.clips("candidate")[0]
     assert clip["credit"] == "Credit: @streamer"
     assert "streamerclips" in json.loads(clip["hashtags"])
