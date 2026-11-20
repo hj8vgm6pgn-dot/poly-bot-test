@@ -85,6 +85,11 @@ class Settings:
     voice_dir: Path = field(default_factory=lambda: Path(_env("VOICE_DIR", "voice")))
     voice_pitch: float = float(_env("VOICE_PITCH", "-3"))  # semitones; negative = deeper
     voice_preset: str | None = _env("VOICE_PRESET")  # a named effect; overrides VOICE_PITCH
+    # Delivery: pauses longer than VOICE_MAX_PAUSE are shortened, and a slow read is sped up
+    # toward VOICE_TARGET_WPM (never by more than VOICE_MAX_SPEEDUP, never slowed down).
+    voice_max_pause: float = float(_env("VOICE_MAX_PAUSE", "0.35"))
+    voice_target_wpm: float = float(_env("VOICE_TARGET_WPM", "170"))
+    voice_max_speedup: float = float(_env("VOICE_MAX_SPEEDUP", "1.12"))
     tts_provider: str = _env("TTS_PROVIDER", "auto")  # auto | elevenlabs | piper | espeak | none
     elevenlabs_api_key: str | None = _env("ELEVENLABS_API_KEY")
     elevenlabs_voice_id: str | None = _env("ELEVENLABS_VOICE_ID")

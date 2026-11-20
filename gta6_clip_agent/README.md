@@ -149,6 +149,12 @@ different tone) or `light`. Try one with `voice-test me.m4a --preset warm`. A lo
 makes your voice less recognisable to people who know you, but it is not real
 anonymity: the effect can be reversed.
 
+**Delivery tuning.** Research on voice and engagement points to delivery over pitch:
+variation in loudness, a brisk pace, no dead air, clean audio. So the agent shortens any
+pause longer than `VOICE_MAX_PAUSE` (0.35 s), speeds a slow read up toward
+`VOICE_TARGET_WPM` (170 words a minute, by at most 12%), and compresses only lightly so
+the natural rise and fall of your voice survives.
+
 **Synthetic voice (fallback).** Used only for clips with no recording: ElevenLabs
 (`ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID`), or the free local `piper` / `espeak-ng`.
 With neither, the commentary is captions only.

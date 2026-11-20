@@ -88,6 +88,8 @@ def _trim_silence(pcm: "np.ndarray", sr: int, threshold_db: float = -45.0,
         return pcm
     frames = pcm[: n * hop].reshape(n, hop).astype(np.float64) / 32768.0
     db = 20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-9)
+    # Judge silence against how loud this recording's speech is, so quiet takes are not cut.
+    threshold_db = min(threshold_db, np.percentile(db, 95) - 30)
     loud = np.flatnonzero(db > threshold_db)
     if len(loud) == 0:
         return pcm
@@ -96,8 +98,50 @@ def _trim_silence(pcm: "np.ndarray", sr: int, threshold_db: float = -45.0,
     return pcm[start:end]
 
 
+def _tighten_pauses(pcm: "np.ndarray", sr: int, max_pause_s: float, threshold_db: float = -42.0) -> "np.ndarray":
+    """Shorten every silent gap longer than ``max_pause_s`` to that length.
+
+    Dead air is where viewers swipe away. Short pauses stay, so the read keeps its rhythm.
+    """
+    import numpy as np
+
+    hop = sr // 100  # 10 ms
+    n = len(pcm) // hop
+    if n == 0 or max_pause_s <= 0:
+        return pcm
+    frames = pcm[: n * hop].reshape(n, hop).astype(np.float64) / 32768.0
+    db = 20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-9)
+    # Relative to this recording's speech level, so soft syllables in a quiet take survive.
+    quiet = db < min(threshold_db, np.percentile(db, 95) - 30)
+    keep = np.ones(n, dtype=bool)
+    limit = int(max_pause_s * 100)
+    i = 0
+    while i < n:
+        if quiet[i]:
+            j = i
+            while j < n and quiet[j]:
+                j += 1
+            if j - i > limit:
+                # keep half the allowed pause on each side so word edges are not clipped
+                keep[i + limit // 2 : j - (limit - limit // 2)] = False
+            i = j
+        else:
+            i += 1
+    return pcm[: n * hop].reshape(n, hop)[keep].reshape(-1) if keep.any() else pcm
+
+
+def pace_speedup(word_count: int, duration_s: float) -> float:
+    """Tempo factor that brings a slow read up toward the target pace (1.0 = leave alone)."""
+    if word_count < 4 or duration_s <= 0:
+        return 1.0
+    wpm = word_count / duration_s * 60
+    if wpm >= settings.voice_target_wpm:
+        return 1.0
+    return round(min(settings.voice_max_speedup, settings.voice_target_wpm / wpm), 3)
+
+
 def process_recording(src: Path, out_path: Path, semitones: float | None = None,
-                      preset: str | None = None) -> Path:
+                      preset: str | None = None, script: str = "") -> Path:
     """Clean up a voice recording and apply the voice effect.
 
     The effect is a named preset (``preset`` or VOICE_PRESET) if one is set, otherwise
@@ -122,8 +166,14 @@ def process_recording(src: Path, out_path: Path, semitones: float | None = None,
     if dec.returncode != 0 or len(dec.stdout) < sr // 5:
         raise RuntimeError(f"could not read recording {src}: {dec.stderr.decode(errors='replace')[-300:]}")
     pcm = _trim_silence(np.frombuffer(dec.stdout[: len(dec.stdout) // 2 * 2], dtype=np.int16), sr)
+    pcm = _tighten_pauses(pcm, sr, settings.voice_max_pause)
+    tempo = pace_speedup(len(script.split()), len(pcm) / sr)
 
-    level = "acompressor=threshold=-20dB:ratio=3:attack=5:release=120,loudnorm=I=-16:TP=-1.5:LRA=7"
+    # Light compression only: the rise and fall in loudness is part of what keeps a voice
+    # interesting, so it is evened out, not flattened.
+    level = "acompressor=threshold=-18dB:ratio=2:attack=8:release=150,loudnorm=I=-16:TP=-1.5:LRA=11"
+    if tempo > 1.001:
+        level = f"atempo={tempo:.3f},{level}"
     shifters = [f"rubberband=pitch={ratio:.5f}",
                 # Fallback without librubberband: resample, then restore the speed.
                 f"asetrate={sr}*{ratio:.5f},aresample={sr},atempo={1 / ratio:.5f}"]
@@ -156,7 +206,7 @@ def voiceover_for(clip_id: int, text: str, out_dir: Path) -> tuple[Path | None, 
     rec = recording_for(clip_id)
     if rec:
         try:
-            return process_recording(rec, out_dir / f"vo_{clip_id:05d}"), "recording"
+            return process_recording(rec, out_dir / f"vo_{clip_id:05d}", script=text), "recording"
         except RuntimeError as e:
             log.warning("%s - falling back", e)
     vo = synthesize(text, out_dir / f"vo_{clip_id:05d}")

@@ -67,3 +67,22 @@ def test_presets_change_character_without_changing_length(tmp_path):
     assert hz == pytest.approx(200, rel=0.03)
     with pytest.raises(RuntimeError, match="unknown voice preset"):
         voice.process_recording(src, tmp_path / "c", preset="robot")
+
+
+def test_long_pauses_are_shortened_but_short_ones_kept():
+    sr = 48000
+    t = np.arange(sr) / sr
+    tone = (np.sin(2 * np.pi * 200 * t) * 8000).astype(np.int16)
+    gap = lambda s: np.zeros(int(sr * s), dtype=np.int16)
+    pcm = np.concatenate([tone, gap(1.5), tone, gap(0.2), tone])
+    out = voice._tighten_pauses(pcm, sr, max_pause_s=0.35)
+    assert len(out) / sr == pytest.approx(3 + 0.35 + 0.2, abs=0.05)
+
+
+def test_slow_reads_are_sped_up_within_limits(monkeypatch):
+    monkeypatch.setattr(settings, "voice_target_wpm", 170)
+    monkeypatch.setattr(settings, "voice_max_speedup", 1.12)
+    assert voice.pace_speedup(20, 6.0) == 1.0          # 200 wpm: already quick
+    assert voice.pace_speedup(20, 7.5) == pytest.approx(1.062, abs=0.01)   # 160 wpm
+    assert voice.pace_speedup(20, 12.0) == 1.12        # 100 wpm: capped
+    assert voice.pace_speedup(2, 5.0) == 1.0           # too short to judge
