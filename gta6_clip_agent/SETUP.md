@@ -220,20 +220,38 @@ Check each one is from the GTA 6 marathon (18 Nov 2026 or later) before approvin
 
 ## Example: pay-per-view campaigns (DiegoLoveless, Bobby VanRiper, KreekCraft)
 
-Fill in the exact wording, hashtags and files from each campaign's brief after joining.
-`--cta` puts a call to action on screen for the last seconds and in the caption.
-`--overlay` keeps a supplied logo on screen for the whole clip.
+Rules as read on 21 Nov 2026. Re-check each brief before relying on them.
 
 ```bash
 python -m clipagent sources add diegoloveless --platform twitch --permission clipping_program \
-    --proof "<campaign link>" --payout 1.0 --name-in-headline \
-    --cta "Watch live: twitch.tv/diegoloveless" --credit "DiegoLoveless"
+    --proof "<campaign link>" --payout 1.0 --name-in-headline --credit "DiegoLoveless" \
+    --tags GTA,DiegoLoveless --cta "Watch Diego live: twitch.tv/diegoloveless" \
+    --rules "GTA gameplay from his Twitch only. Hook and payoff, clean subtitles, accurate titles. Nothing that makes him look bad."
 
-python -m clipagent sources add <bobby's twitch login> --platform twitch --permission clipping_program \
-    --proof "<campaign link>" --payout 1.5 --name-in-headline --credit "Bobby VanRiper"
+python -m clipagent sources add bobby_vanriper --platform twitch --permission clipping_program \
+    --proof "<campaign link>" --payout 1.5 --name-in-headline --credit "Bobby Vanriper" \
+    --tags bobbyvanriper,gta6,gtavi --cta "Follow Bobby Vanriper on Twitch: twitch.tv/bobby_vanriper" \
+    --rules "English, readable with sound off, hook in 2 seconds. No AI-generated content or thumbnails. Discord membership needed for payout."
 
 python -m clipagent sources add <kreekcraft's channel> --permission clipping_program \
     --proof "<campaign link>" --payout 1.0 --name-in-headline --credit "KreekCraft" \
     --overlay assets/kreekcraft_logo.png --overlay-pos top-right \
-    --cta "Watch the full stream on KreekCraft's channel"
+    --caption "Watch KreekCraft on YouTube and Twitch #GTA6 #KreekCraft #GrandTheftAutoVI" \
+    --rules "Official GTA 6 streams or replays only. Logo visible first frame to last. No links in the caption."
 ```
+
+`--cta` shows the line on screen for the last seconds and adds it to the caption.
+`--overlay` keeps a supplied logo on screen for the whole clip. `--caption` uses the
+campaign's exact caption in place of the automatic credit and hashtags.
+
+### Rules these campaigns share, which the agent cannot do for you
+
+- **Audience:** at least 40% of each clip's viewers must be in the US, UK, Canada or
+  Australia. You prove it with a screen recording of that video's analytics.
+- **Warm up new TikTok and Instagram accounts:** two days of browsing and engaging in the
+  niche, then an original test post from the phone on day three.
+- **Post the first ten or more videos from the phone app,** not through automatic upload.
+  Use `review` to get the file, caption and cover, and post by hand.
+- **Submit each post's link on the campaign page within 30 minutes.**
+- **Keep likes public and leave each post up for at least 30 days.**
+- **No more than five near-identical edits.**

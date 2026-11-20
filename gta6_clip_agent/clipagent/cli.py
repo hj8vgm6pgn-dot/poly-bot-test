@@ -109,6 +109,7 @@ def cmd_sources(db: DB, args) -> None:
         style=args.style, name_in_headline=1 if args.name_in_headline else 0,
         plain_cover=1 if args.plain_cover else 0,
         overlay_path=args.overlay, overlay_pos=args.overlay_pos, cta=args.cta,
+        caption_required=args.caption,
     )
     print(f"Approved source #{sid}: {info['name']} ({args.permission})")
 
@@ -268,6 +269,11 @@ def cmd_scan(db: DB, args) -> None:
                            title="GTA 6 moment #Shorts",
                            caption="GTA 6 is wild", hashtags=json.dumps(tags))
                 print(f"  {c.start_s:7.1f}-{c.end_s:7.1f}s  signal {c.score:5.2f}")
+            if src.get("caption_required"):
+                # The campaign dictates the caption: our line first, then theirs word for word,
+                # with no automatic credit or hashtags that could break its rules.
+                own = (row.get("caption") or "").strip()
+                row.update(caption=f"{own}\n\n{src['caption_required']}".strip(), credit="", hashtags="[]")
             db.add_clip(**row)
         db.update_video(v["id"], status="scanned")
 
@@ -493,6 +499,10 @@ def cmd_publish(db: DB, args) -> None:
                 print(f"#{c['id']} -> {p} FAILED: {e}")
         if not args.dry_run:
             db.update_clip(c["id"], status="published")
+            src = db.source(c["source_id"]) or {}
+            if src.get("permission") == "clipping_program":
+                print(f"   REMINDER: submit this post's link on the {src.get('name')} campaign page now. "
+                      "Most campaigns require it within 30 minutes of posting.")
 
 
 def cmd_tiktok_login(_db: DB, args) -> None:
@@ -570,6 +580,8 @@ def main(argv: list[str] | None = None) -> None:
     so.add_argument("--overlay-pos", default="top-right",
                     choices=["top-left", "top-right", "top-center", "bottom-left", "bottom-right"])
     so.add_argument("--cta", help="call to action the campaign requires, e.g. \"Watch live: twitch.tv/name\"")
+    so.add_argument("--caption", help="exact caption text the campaign requires on every post; "
+                                      "replaces the automatic credit line and hashtags")
     so.add_argument("--plain-cover", action="store_true",
                     help="unbranded cover (a frame of the clip) for campaigns that forbid logos")
     so.add_argument("--style", choices=["campaign", "commentary"],

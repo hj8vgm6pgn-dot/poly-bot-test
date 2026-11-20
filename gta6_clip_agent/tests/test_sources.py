@@ -96,7 +96,7 @@ def test_cli_flow_blocks_unapproved_footage(footage, tmp_path, monkeypatch, caps
         cli.main(["sources", "add", "streamer", "--platform", "twitch", "--permission", "direct"])
     cli.main(["sources", "add", "streamer", "--platform", "twitch", "--permission", "clipping_program",
               "--proof", "https://example.com/campaign", "--tags", "streamerclips", "--payout", "1.5",
-              "--plain-cover"])
+              "--plain-cover", "--caption", "Watch Streamer on Twitch #GTA6 #Streamer"])
 
     # Stray footage with no source is ignored by scan.
     stray = settings.footage_dir / "random_download.mp4"
@@ -109,9 +109,9 @@ def test_cli_flow_blocks_unapproved_footage(footage, tmp_path, monkeypatch, caps
     cli.main(["import", str(footage), "--source", "1"])
     cli.main(["scan", "--no-ai", "--no-speech"])
     clip = db.clips("candidate")[0]
-    assert clip["credit"] == "Credit: @streamer"
+    assert clip["caption"].endswith("Watch Streamer on Twitch #GTA6 #Streamer")
+    assert clip["credit"] == "" and clip["hashtags"] == "[]"   # the campaign's caption is used as written
     assert "streamer" not in clip["hook"].lower() and "streamer" not in clip["title"].lower()
-    assert "streamerclips" in json.loads(clip["hashtags"])
 
     cli.main(["render"])
     assert (settings.output_dir / "covers" / f"clip_{clip['id']:05d}.jpg").stat().st_size > 5000
