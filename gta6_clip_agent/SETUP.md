@@ -18,7 +18,7 @@ see what's connected and how close each account is to monetization.
 - [ ] **Connect YouTube**: create the channel, set up OAuth and set the `YOUTUBE_*` keys
 - [ ] **Get permission** from creators: join clipping programs and message creators (section 4)
 - [ ] Register each one with `python -m clipagent sources add ...`
-- [ ] Set up a voiceover provider (section 5, optional)
+- [ ] Record a voice test and pick your `VOICE_PITCH` (section 5)
 - [ ] Turn on monetization on each platform once eligible (below)
 - [ ] Run `python -m clipagent accounts` and confirm all three show as connected
 
@@ -140,12 +140,24 @@ one: some uploaders mark videos CC that they do not own.
 - Keep the proof. If a clip gets a copyright claim, the proof is what you dispute it with.
 - Content ID claims can still happen automatically even when you have permission.
 
-## 5. Voiceover (optional, recommended)
+## 5. Voiceover in your own voice (recommended)
 
-For spoken commentary, create an ElevenLabs account, pick a voice, and set
-`ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` in `.env`. Without it the commentary is
-shown as captions only. TikTok asks you to label AI-generated content: turn on the
-"AI-generated" label when you post clips that use a synthetic voice.
+1. Run `python -m clipagent script`. It lists each clip's commentary line and the file
+   name to save it under.
+2. Record each line. On iPhone, Voice Memos works: record, then share the file to your
+   computer and rename it (for example `clip_00012.m4a`). Put it in the `voice/` folder.
+3. Run `python -m clipagent voice-test voice/clip_00012.m4a --pitch -3` and listen to
+   `out/voice_test.wav`. Try values from `-2` to `-5` and put the one you like in `.env`
+   as `VOICE_PITCH`.
+4. Run `python -m clipagent render --ids 12` to rebuild the clip with your voice.
+
+Tips: record in a quiet room, hold the phone a hand's width from your mouth, and read
+with energy. The line does not have to match the script word for word.
+
+A synthetic voice is the fallback for clips you have not recorded: set
+`ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID`. TikTok asks you to label AI-generated
+content, so turn on its "AI-generated" label for clips that use a synthetic voice. Clips
+with your own pitch-shifted voice do not need it.
 
 ---
 

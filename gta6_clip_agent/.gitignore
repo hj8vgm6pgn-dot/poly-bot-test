@@ -3,3 +3,5 @@ footage/*
 !footage/.gitkeep
 .env
 __pycache__/
+voice/*
+!voice/.gitkeep

@@ -15,6 +15,9 @@ Clips:
     python -m clipagent trends              # pull trending GTA 6 shorts metadata
     python -m clipagent scan [--no-ai]      # find + score moments
     python -m clipagent render [--min 60]   # 9:16 render with credit, captions, voiceover
+    python -m clipagent script              # commentary lines to record in your own voice
+    python -m clipagent voice-test me.m4a --pitch -3   # hear the pitch effect
+    python -m clipagent render --ids 12     # re-render a clip with your recording
     python -m clipagent compile             # 60s+ cut of top moments (TikTok rewards)
     python -m clipagent review              # list rendered clips awaiting approval
     python -m clipagent approve 3 5 7       # or: reject 4
@@ -267,30 +270,33 @@ def _render_kwargs(db: DB, c: dict, vo_dir: Path, with_voice: bool = True, mode:
     captions = transcribe.caption_cards(words, c["start_s"], c["end_s"]) if words else None
 
     commentary = "" if campaign else (c.get("voiceover") or "")
-    vo = None
+    vo, vo_from = None, "none"
     if with_voice and commentary:
-        vo = voice.synthesize(commentary, vo_dir / f"vo_{c['id']:05d}")
+        vo, vo_from = voice.voiceover_for(c["id"], commentary, vo_dir)
 
     face = layout.detect_face(path, c["start_s"], c["end_s"]) if mode in ("auto", "stack", "crop") else None
     chosen = layout.choose(face) if mode == "auto" else mode
     return dict(source=path, start_s=c["start_s"], end_s=c["end_s"], hook=c["hook"] or "",
                 has_audio=analyze.has_audio(path), credit=sources.watermark(src),
-                commentary=commentary, voiceover=vo, mode=chosen, face=face,
+                commentary=commentary, voiceover=vo, mode=chosen, face=face, _voice=vo_from,
                 # Our commentary captions and the creator's subtitles share the lower third.
                 captions=None if commentary else captions)
 
 
 def cmd_render(db: DB, args) -> None:
     rendered_dir = settings.output_dir / "rendered"
-    cands = db.clips("candidate")
-    if args.min is not None:
-        cands = [c for c in cands if (c["ai_score"] or 0) >= args.min]
-    cands = cands[: args.limit]
+    if args.ids:
+        # Re-render specific clips, e.g. after recording their voiceover.
+        cands = [c for c in (db.clip(i) for i in args.ids)
+                 if c and c["source"] != "compilation" and c["status"] != "published"]
+    else:
+        cands = db.clips("candidate")
+        if args.min is not None:
+            cands = [c for c in cands if (c["ai_score"] or 0) >= args.min]
+        cands = cands[: args.limit]
     if not cands:
         print("Nothing to render. Run `scan` first (or lower --min).")
         return
-    if not voice.available_provider():
-        print("note: no voiceover provider configured; commentary will be captions only (see SETUP.md)")
     for c in cands:
         out = rendered_dir / f"clip_{c['id']:05d}.mp4"
         try:
@@ -299,9 +305,14 @@ def cmd_render(db: DB, args) -> None:
         except PermissionError_ as e:
             print(f"#{c['id']} BLOCKED: {e}")
             continue
-        print(f"rendering #{c['id']} ({kw['mode']} layout) -> {out}")
+        vo_from = kw.pop("_voice")
+        note = {"recording": "your voice", "tts": "synthetic voice", "none": "captions only"}[vo_from]
+        if not kw["commentary"]:
+            note = "original audio"
+        print(f"rendering #{c['id']} ({kw['mode']} layout, {note}) -> {out}")
         edit.render(out_path=out, font_file=settings.font_file, **kw)
-        db.update_clip(c["id"], rendered_path=str(out), status="rendered")
+        db.update_clip(c["id"], rendered_path=str(out),
+                       status="approved" if c["status"] == "approved" else "rendered")
 
 
 def cmd_compile(db: DB, args) -> None:
@@ -327,6 +338,7 @@ def cmd_compile(db: DB, args) -> None:
     for i, c in enumerate(chosen):
         kw = _render_kwargs(db, c, settings.output_dir / "voice", with_voice=not args.no_voice,
                             mode=args.mode)
+        kw.pop("_voice")
         if i and kw["mode"] != "stack":  # the stacked layout keeps its own headline per segment
             kw["hook"] = ""
         segments.append(kw)
@@ -342,6 +354,33 @@ def cmd_compile(db: DB, args) -> None:
     print(f"compiling {len(chosen)} moments ({total:.0f}s) -> {out}")
     edit.compile_segments(segments, out, settings.font_file)
     db.update_clip(cid, rendered_path=str(out), status="rendered")
+
+
+def cmd_script(db: DB, _args) -> None:
+    """List the commentary lines to record in your own voice."""
+    rows = [c for c in db.clips("candidate") + db.clips("rendered") + db.clips("approved")
+            if c.get("voiceover") and c["source"] != "compilation"]
+    if not rows:
+        print("No commentary lines yet. Run `scan` on a source with --style commentary.")
+        return
+    settings.voice_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Record each line, save it in {settings.voice_dir}/ under the name shown, then run "
+          f"`render --ids <id>`.\nPitch shift: {settings.voice_pitch:+g} semitones (VOICE_PITCH).\n")
+    for c in sorted(rows, key=lambda c: c["id"]):
+        rec = voice.recording_for(c["id"])
+        state = f"recorded ({rec.name})" if rec else f"save as clip_{c['id']:05d}.m4a"
+        print(f"#{c['id']:<4} [{state}]\n       \"{c['voiceover']}\"")
+
+
+def cmd_voice_test(_db: DB, args) -> None:
+    """Process one recording so you can hear the pitch setting before using it."""
+    out = settings.output_dir / "voice_test"
+    try:
+        res = voice.process_recording(Path(args.file), out, semitones=args.pitch)
+    except RuntimeError as e:
+        raise SystemExit(str(e))
+    used = settings.voice_pitch if args.pitch is None else args.pitch
+    print(f"Wrote {res} at {used:+g} semitones. Listen, then set VOICE_PITCH in .env to the value you like.")
 
 
 def cmd_review(db: DB, _args) -> None:
@@ -478,6 +517,7 @@ def main(argv: list[str] | None = None) -> None:
     r = sub.add_parser("render")
     r.add_argument("--min", type=float, default=None, help="minimum AI score to render")
     r.add_argument("--limit", type=int, default=10)
+    r.add_argument("--ids", type=int, nargs="+", help="re-render these clips (e.g. after recording your voice)")
     r.add_argument("--mode", choices=["auto", "stack", "crop", "blur"], default="auto",
                    help="auto picks by finding the creator's face")
     r.add_argument("--no-voice", action="store_true", help="captions only, no spoken commentary")
@@ -487,6 +527,10 @@ def main(argv: list[str] | None = None) -> None:
     cp.add_argument("--min", type=float, default=None, help="minimum AI score of included moments")
     cp.add_argument("--mode", choices=["auto", "stack", "crop", "blur"], default="auto")
     cp.add_argument("--no-voice", action="store_true")
+    sub.add_parser("script", help="list commentary lines to record in your own voice")
+    vt = sub.add_parser("voice-test", help="hear your voice with the pitch effect")
+    vt.add_argument("file")
+    vt.add_argument("--pitch", type=float, default=None, help="semitones, e.g. -3 (deeper) to try")
     sub.add_parser("review")
     a = sub.add_parser("approve")
     a.add_argument("ids", type=int, nargs="+")
@@ -529,6 +573,10 @@ def main(argv: list[str] | None = None) -> None:
         cmd_render(db, args)
     elif args.cmd == "compile":
         cmd_compile(db, args)
+    elif args.cmd == "script":
+        cmd_script(db, args)
+    elif args.cmd == "voice-test":
+        cmd_voice_test(db, args)
     elif args.cmd == "review":
         cmd_review(db, args)
     elif args.cmd == "approve":
@@ -546,7 +594,7 @@ def main(argv: list[str] | None = None) -> None:
         cmd_discover(db, ns(cc=args.cc))
         cmd_fetch(db, ns(ids=[], top=3, max_minutes=90))
         cmd_scan(db, ns(no_ai=args.no_ai, rescan=False, no_speech=False))
-        cmd_render(db, ns(min=None if args.no_ai else args.min, limit=10, mode="auto", no_voice=False))
+        cmd_render(db, ns(min=None if args.no_ai else args.min, limit=10, mode="auto", no_voice=False, ids=None))
         cmd_review(db, args)
 
 

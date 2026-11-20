@@ -118,11 +118,27 @@ moments where the creator is talking over stretches of raw trailer.
 ## Commentary and voiceover
 
 Platforms demonetize channels that repost footage with nothing added, even with
-permission. So Claude writes one or two sentences of original commentary per clip.
-It is burned in as captions and, if a voice provider is configured, spoken over
-the clip with the original audio lowered underneath. Providers: ElevenLabs
-(`ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID`), or the free local `piper` /
-`espeak-ng`. Recording the line in your own voice is better still.
+permission. So for commentary-style sources Claude writes one or two sentences of
+original commentary per clip. It is burned in as captions and spoken over the clip,
+with the original audio lowered underneath.
+
+**Your own voice (recommended).** It counts for more than a synthetic voice.
+
+```bash
+python -m clipagent script                       # the lines to record, and the file name for each
+# record each line on your phone or computer and save it as voice/clip_00012.m4a
+python -m clipagent voice-test voice/clip_00012.m4a --pitch -3   # hear the effect first
+python -m clipagent render --ids 12              # re-render that clip with your voice
+```
+
+The agent removes background hiss, trims silence, evens out the volume and lowers
+the pitch by `VOICE_PITCH` semitones (default `-3`; try `-2` to `-5`). A lower pitch
+makes your voice less recognisable to people who know you, but it is not real
+anonymity: the effect can be reversed.
+
+**Synthetic voice (fallback).** Used only for clips with no recording: ElevenLabs
+(`ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID`), or the free local `piper` / `espeak-ng`.
+With neither, the commentary is captions only.
 
 ## What each platform API allows
 

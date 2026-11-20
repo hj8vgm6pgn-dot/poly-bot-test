@@ -1,4 +1,11 @@
-"""Text-to-speech for the commentary track.
+"""The commentary track: your own recorded voice, or text-to-speech as a fallback.
+
+Your own voice is the strongest "original input" a clips channel can add. Record
+the line the agent wrote (`python -m clipagent script` lists them), save it as
+voice/clip_<id>.m4a, and the agent cleans it up, lowers the pitch by VOICE_PITCH
+semitones and mixes it in. A recording always wins over text-to-speech.
+
+Text-to-speech providers, used only when there is no recording:
 
 The commentary is what makes a clip of someone else's footage *your* video in the
 eyes of the platforms' reused-content rules, so every clip gets a short original
@@ -22,6 +29,98 @@ import requests
 from .config import settings
 
 log = logging.getLogger(__name__)
+
+
+AUDIO_EXT = (".m4a", ".mp3", ".wav", ".aac", ".ogg", ".opus", ".caf", ".flac", ".mov", ".mp4")
+
+
+def recording_for(clip_id: int) -> Path | None:
+    """Your recording for a clip: voice/clip_00012.m4a, voice/clip_12.m4a or voice/12.m4a."""
+    d = settings.voice_dir
+    if not d.is_dir():
+        return None
+    names = {f"clip_{clip_id:05d}", f"clip_{clip_id}", str(clip_id)}
+    for p in sorted(d.iterdir()):
+        if p.stem.lower() in names and p.suffix.lower() in AUDIO_EXT:
+            return p
+    return None
+
+
+def _trim_silence(pcm: "np.ndarray", sr: int, threshold_db: float = -45.0,
+                  lead_s: float = 0.05, tail_s: float = 0.15) -> "np.ndarray":
+    """Drop silence before the first and after the last audible 20 ms frame."""
+    import numpy as np
+
+    hop = sr // 50
+    n = len(pcm) // hop
+    if n == 0:
+        return pcm
+    frames = pcm[: n * hop].reshape(n, hop).astype(np.float64) / 32768.0
+    db = 20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-9)
+    loud = np.flatnonzero(db > threshold_db)
+    if len(loud) == 0:
+        return pcm
+    start = max(0, int(loud[0] * hop - lead_s * sr))
+    end = min(len(pcm), int((loud[-1] + 1) * hop + tail_s * sr))
+    return pcm[start:end]
+
+
+def process_recording(src: Path, out_path: Path, semitones: float | None = None) -> Path:
+    """Clean up a voice recording and shift its pitch (negative semitones = deeper).
+
+    Steps: cut rumble and background hiss, trim silence at both ends, shift the pitch
+    without changing speed, even out the level.
+    """
+    import numpy as np
+
+    sr = 48000
+    st = settings.voice_pitch if semitones is None else semitones
+    ratio = 2 ** (st / 12)
+    out = out_path.with_suffix(".wav")
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    dec = subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", str(sr),
+         "-af", "highpass=f=70,afftdn=nr=10", "-f", "s16le", "-"],
+        capture_output=True, timeout=180,
+    )
+    if dec.returncode != 0 or len(dec.stdout) < sr // 5:
+        raise RuntimeError(f"could not read recording {src}: {dec.stderr.decode(errors='replace')[-300:]}")
+    pcm = _trim_silence(np.frombuffer(dec.stdout[: len(dec.stdout) // 2 * 2], dtype=np.int16), sr)
+
+    level = "acompressor=threshold=-20dB:ratio=3:attack=5:release=120,loudnorm=I=-16:TP=-1.5:LRA=7"
+    shifters = [f"rubberband=pitch={ratio:.5f}",
+                # Fallback without librubberband: resample, then restore the speed.
+                f"asetrate={sr}*{ratio:.5f},aresample={sr},atempo={1 / ratio:.5f}"]
+    if abs(st) < 0.01:
+        shifters = ["anull"]
+    last = ""
+    for shift in shifters:
+        try:
+            run = subprocess.run(
+                ["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "s16le", "-ar", str(sr), "-ac", "1",
+                 "-i", "-", "-af", f"{shift},{level}", "-ar", str(sr), str(out)],
+                input=pcm.tobytes(), capture_output=True, timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            last = "timed out"
+            continue
+        if run.returncode == 0 and out.exists() and out.stat().st_size > 1000:
+            return out
+        last = run.stderr.decode(errors="replace")[-300:]
+    raise RuntimeError(f"could not process recording {src}: {last}")
+
+
+def voiceover_for(clip_id: int, text: str, out_dir: Path) -> tuple[Path | None, str]:
+    """The voiceover file for a clip and where it came from: recording | tts | none."""
+    rec = recording_for(clip_id)
+    if rec:
+        try:
+            return process_recording(rec, out_dir / f"vo_{clip_id:05d}"), "recording"
+        except RuntimeError as e:
+            log.warning("%s - falling back", e)
+    vo = synthesize(text, out_dir / f"vo_{clip_id:05d}")
+    return vo, ("tts" if vo else "none")
 
 
 def available_provider() -> str | None:

@@ -67,6 +67,9 @@ class Settings:
     campaign_max_s: float = float(_env("CAMPAIGN_MAX_S", "20"))
 
     # Voiceover (your channel's original commentary track)
+    # Your own recordings: voice/clip_00012.m4a is used for clip #12 and pitched by VOICE_PITCH.
+    voice_dir: Path = field(default_factory=lambda: Path(_env("VOICE_DIR", "voice")))
+    voice_pitch: float = float(_env("VOICE_PITCH", "-3"))  # semitones; negative = deeper
     tts_provider: str = _env("TTS_PROVIDER", "auto")  # auto | elevenlabs | piper | espeak | none
     elevenlabs_api_key: str | None = _env("ELEVENLABS_API_KEY")
     elevenlabs_voice_id: str | None = _env("ELEVENLABS_VOICE_ID")
