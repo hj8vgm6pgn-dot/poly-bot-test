@@ -1,0 +1,9 @@
+anthropic>=2.11
+requests>=2.31
+numpy>=1.26
+pydantic>=2.6
+python-dotenv>=1.0
+pytest>=8
+yt-dlp>=2026.1
+faster-whisper>=1.0
+opencv-python-headless<5
